@@ -1,3 +1,4 @@
+import React from 'react';
 
 function Excel() {
   return (
@@ -6,4 +7,5 @@ function Excel() {
     </div>
   );
 }
+
 export default Excel;
