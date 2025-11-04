@@ -1,10 +1,10 @@
 import React from "react";
-import Excel from "./Pages/Excel.jsx";
+import ExcelGrid from "./Pages/ExcelGrid";
 
 function App() {
   return (
     <div>
-      <Excel />
+      <ExcelGrid />
     </div>
   );
 }
