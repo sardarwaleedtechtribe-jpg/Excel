@@ -7,6 +7,7 @@ const rows = Array.from({ length: 27 }, (_, i) => i + 1);
 
 export default function ExcelGrid() {
   const [selectedCell, setSelectedCell] = useState({ row: 1, col: "A" });
+  const [selectionRange, setSelectionRange] = useState(null); // { start: {row,col}, end: {row,col} }
   const [cellContents, setCellContents] = useState({});
   const [colWidths, setColWidths] = useState(
     columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {})
@@ -16,6 +17,8 @@ export default function ExcelGrid() {
   );
   const inputRefs = useRef({});
   const resizingRef = useRef(null);
+  const selectingRef = useRef(false);
+  const dragAnchorRef = useRef(null);
 
   // Autofocus selected cell
   useEffect(() => {
@@ -46,6 +49,7 @@ export default function ExcelGrid() {
 
     const handleMouseUp = () => {
       resizingRef.current = null;
+      selectingRef.current = false;
     };
 
     window.addEventListener("mousemove", handleMouseMove);
@@ -55,6 +59,36 @@ export default function ExcelGrid() {
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, []);
+
+  const getRangeBounds = (range) => {
+    if (!range) return null;
+    const startRow = Math.min(range.start.row, range.end.row);
+    const endRow = Math.max(range.start.row, range.end.row);
+    const startColIdx = Math.min(
+      columns.indexOf(range.start.col),
+      columns.indexOf(range.end.col)
+    );
+    const endColIdx = Math.max(
+      columns.indexOf(range.start.col),
+      columns.indexOf(range.end.col)
+    );
+    return { startRow, endRow, startColIdx, endColIdx };
+  };
+
+  const selectionBounds = getRangeBounds(selectionRange);
+
+  const isInSelection = (row, col) => {
+    if (!selectionRange) return false;
+    const b = getRangeBounds(selectionRange);
+    if (!b) return false;
+    const colIdx = columns.indexOf(col);
+    return (
+      row >= b.startRow &&
+      row <= b.endRow &&
+      colIdx >= b.startColIdx &&
+      colIdx <= b.endColIdx
+    );
+  };
 
   return (
     <div className="bg-gray-100 min-h-screen flex items-start justify-start overflow-auto">
@@ -74,7 +108,9 @@ export default function ExcelGrid() {
 
         {/* Column headers */}
         {columns.map((col) => {
-          const isActiveCol = selectedCell.col === col;
+          const colIdx = columns.indexOf(col);
+          const isColInRange = !!selectionBounds && colIdx >= selectionBounds.startColIdx && colIdx <= selectionBounds.endColIdx;
+          const isActiveCol = selectedCell.col === col || isColInRange;
           return (
             <div
               key={col}
@@ -104,7 +140,7 @@ export default function ExcelGrid() {
             {/* Row header */}
             <div
               className={`relative flex items-center justify-end text-black border border-gray-400 font-semibold pr-1
-                ${selectedCell.row === row ? "bg-green-200 text-green-800" : "bg-gray-100"}`}
+                ${(selectedCell.row === row) || (selectionBounds && row >= selectionBounds.startRow && row <= selectionBounds.endRow) ? "bg-green-200 text-green-800" : "bg-gray-100"}`}
               style={{ height: rowHeights[row] }}
             >
               {row}
@@ -124,19 +160,34 @@ export default function ExcelGrid() {
 
             {/* Cells */}
             {columns.map((col) => {
-              const isSelected =
-                selectedCell.row === row && selectedCell.col === col;
+              const isSelected = selectedCell.row === row && selectedCell.col === col;
+              const isInRange = isInSelection(row, col);
 
               return (
                 <div
                   key={`${row}-${col}`}
                   className={`border border-gray-300 hover:bg-green-100 rounded-none 
-                    ${isSelected ? "border-green-600 border-2" : ""}`}
+                    ${isInRange ? "bg-green-100" : ""} ${isSelected ? "border-green-600 border-2" : ""}`}
                   style={{
                     width: colWidths[col],
                     height: rowHeights[row],
                   }}
-                  onClick={() => setSelectedCell({ row, col })}
+                  onMouseDown={(e) => {
+                    // Start selection
+                    selectingRef.current = true;
+                    const anchor = e.shiftKey ? selectedCell : { row, col };
+                    dragAnchorRef.current = anchor;
+                    setSelectedCell(anchor);
+                    setSelectionRange({ start: anchor, end: { row, col } });
+                  }}
+                  onMouseEnter={() => {
+                    // Update selection when dragging
+                    if (!selectingRef.current || !dragAnchorRef.current) return;
+                    setSelectionRange({ start: dragAnchorRef.current, end: { row, col } });
+                  }}
+                  onMouseUp={() => {
+                    selectingRef.current = false;
+                  }}
                 >
                   <input
                     ref={(el) => (inputRefs.current[`${row}-${col}`] = el)}
@@ -172,6 +223,7 @@ export default function ExcelGrid() {
                           newColIndex = Math.max(colIndex - 1, 0);
                         const newCol = columns[newColIndex];
                         setSelectedCell({ row: newRow, col: newCol });
+                        setSelectionRange(null);
                       }
                     }}
                   />
