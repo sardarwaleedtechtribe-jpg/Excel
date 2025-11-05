@@ -90,10 +90,42 @@ export default function ExcelGrid() {
     );
   };
 
+  const rowHeaderWidthPx = 35; // matches the first track width
+  const colHeaderHeightPx = 32; // ~2rem
+
+  const getLeftForCol = (col) => {
+    const idx = columns.indexOf(col);
+    let left = rowHeaderWidthPx;
+    for (let i = 0; i < idx; i++) left += colWidths[columns[i]];
+    return left;
+  };
+
+  const getTopForRow = (row) => {
+    let top = colHeaderHeightPx;
+    for (let r = 1; r < row; r++) top += rowHeights[r];
+    return top;
+  };
+
+  const getSelectionOverlayStyle = () => {
+    if (!selectionBounds) return null;
+    const { startRow, endRow, startColIdx, endColIdx } = selectionBounds;
+    const startCol = columns[startColIdx];
+    const endCol = columns[endColIdx];
+    const left = getLeftForCol(startCol);
+    const top = getTopForRow(startRow);
+    let width = 0;
+    for (let i = startColIdx; i <= endColIdx; i++) width += colWidths[columns[i]];
+    let height = 0;
+    for (let r = startRow; r <= endRow; r++) height += rowHeights[r];
+    return { left, top, width, height };
+  };
+
+  const selectionOverlay = getSelectionOverlayStyle();
+
   return (
     <div className="bg-gray-100 min-h-screen flex items-start justify-start overflow-auto">
       <div
-        className="grid border select-none"
+        className="grid border select-none relative"
         style={{
           gridTemplateColumns: `35px ${columns
             .map((c) => `${colWidths[c]}px`)
@@ -162,15 +194,22 @@ export default function ExcelGrid() {
             {columns.map((col) => {
               const isSelected = selectedCell.row === row && selectedCell.col === col;
               const isInRange = isInSelection(row, col);
+              const isMultiSelection = !!selectionBounds && (selectionBounds.endRow > selectionBounds.startRow || selectionBounds.endColIdx > selectionBounds.startColIdx);
 
               return (
                 <div
                   key={`${row}-${col}`}
-                  className={`border border-gray-300 hover:bg-green-100 rounded-none 
-                    ${isInRange ? "bg-green-100" : ""} ${isSelected ? "border-green-600 border-2" : ""}`}
+                  className={`relative hover:bg-green-100 ${isInRange ? (isSelected && isMultiSelection ? "bg-green-200" : "bg-green-100") : ""}`}
                   style={{
                     width: colWidths[col],
                     height: rowHeights[row],
+                    border: isSelected && !(selectionRange && (selectionRange.start.row !== selectionRange.end.row || selectionRange.start.col !== selectionRange.end.col))
+                      ? '2px solid #1f2937' 
+                      : isInRange 
+                        ? '1px solid #d1d5db' 
+                        : '1px solid #d1d5db',
+                    margin: '0 -1px -1px 0',
+                    zIndex: isSelected ? 2 : 1,
                   }}
                   onMouseDown={(e) => {
                     // Start selection
@@ -232,6 +271,20 @@ export default function ExcelGrid() {
             })}
           </React.Fragment>
         ))}
+        {/* Selection overlay outline for multi-cell ranges */}
+        {selectionOverlay && (selectionBounds.endRow - selectionBounds.startRow > 0 || selectionBounds.endColIdx - selectionBounds.startColIdx > 0) && (
+          <div
+            className="pointer-events-none absolute border-2 border-black"
+            style={{
+              left: `${selectionOverlay.left}px`,
+              top: `${selectionOverlay.top}px`,
+              width: `${selectionOverlay.width}px`,
+              height: `${selectionOverlay.height}px`,
+              boxSizing: "border-box",
+              zIndex: 10,
+            }}
+          />
+        )}
       </div>
     </div>
   );
