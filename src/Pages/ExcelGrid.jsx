@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createFormulaUtils } from "../utils/formulas";
+import FillHandle from "../Components/FillHandle";
 
 const columns = Array.from({ length: 18 }, (_, i) =>
   String.fromCharCode(65 + i)
@@ -9,6 +11,7 @@ export default function ExcelGrid() {
   const [selectedCell, setSelectedCell] = useState({ row: 1, col: "A" });
   const [selectionRange, setSelectionRange] = useState(null); // { start: {row,col}, end: {row,col} }
   const [cellContents, setCellContents] = useState({});
+  const [editingKey, setEditingKey] = useState(null);
   const [colWidths, setColWidths] = useState(
     columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {})
   );
@@ -20,7 +23,7 @@ export default function ExcelGrid() {
   const selectingRef = useRef(false);
   const dragAnchorRef = useRef(null);
   const containerRef = useRef(null);
-  const fillDragRef = useRef({ active: false, startRange: null, previewEnd: null });
+  // moved fill handle drag state into FillHandle component
 
   // Autofocus selected cell
   useEffect(() => {
@@ -123,6 +126,13 @@ export default function ExcelGrid() {
   };
 
   const selectionOverlay = getSelectionOverlayStyle();
+
+  // Formula utilities via external module
+  const getRawByKey = (key) => cellContents[key] ?? "";
+  const { getDisplayForCell } = useMemo(
+    () => createFormulaUtils(columns, rows.length, getRawByKey),
+    [cellContents]
+  );
 
   const clientToCell = (clientX, clientY) => {
     const container = containerRef.current;
@@ -345,47 +355,7 @@ export default function ExcelGrid() {
     }
   };
 
-  useEffect(() => {
-    const onMouseMove = (e) => {
-      if (!fillDragRef.current.active || !fillDragRef.current.startRange) return;
-      const endCell = clientToCell(e.clientX, e.clientY);
-      if (!endCell) return;
-      const union = getUnionRangeFromDrag(fillDragRef.current.startRange, endCell);
-      fillDragRef.current.previewEnd = union;
-      // trigger re-render
-      setSelectedCell((s) => ({ ...s }));
-    };
-    const onMouseUp = () => {
-      if (!fillDragRef.current.active || !fillDragRef.current.startRange || !fillDragRef.current.previewEnd) {
-        fillDragRef.current = { active: false, startRange: null, previewEnd: null };
-        return;
-      }
-      const src = fillDragRef.current.startRange;
-      const final = fillDragRef.current.previewEnd;
-      fillDragRef.current = { active: false, startRange: null, previewEnd: null };
-
-      // Only apply if final extends beyond source
-      if (
-        final.startRow !== src.startRow ||
-        final.endRow !== src.endRow ||
-        final.startColIdx !== src.startColIdx ||
-        final.endColIdx !== src.endColIdx
-      ) {
-        applyFill(src, final, final.axis);
-        // Update selection to final
-        const start = { row: final.startRow, col: columns[final.startColIdx] };
-        const end = { row: final.endRow, col: columns[final.endColIdx] };
-        setSelectionRange({ start, end });
-        setSelectedCell(end);
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [colWidths, rowHeights, cellContents]);
+  // Fill handle listeners handled inside FillHandle component
 
   return (
     <div className="bg-gray-100 min-h-screen flex items-start justify-start overflow-auto">
@@ -498,13 +468,19 @@ export default function ExcelGrid() {
                     ref={(el) => (inputRefs.current[`${row}-${col}`] = el)}
                     type="text"
                     className="w-full h-full bg-transparent caret-transparent items-end text-left cursor-cell focus:outline-none px-1 "
-                    value={cellContents[`${row}-${col}`] || ""}
+                    value={
+                      editingKey === `${row}-${col}`
+                        ? (cellContents[`${row}-${col}`] || "")
+                        : getDisplayForCell(row, col)
+                    }
                     onChange={(e) =>
                       setCellContents((prev) => ({
                         ...prev,
                         [`${row}-${col}`]: e.target.value,
                       }))
                     }
+                    onFocus={() => setEditingKey(`${row}-${col}`)}
+                    onBlur={() => setEditingKey(null)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -529,6 +505,7 @@ export default function ExcelGrid() {
                         const newCol = columns[newColIndex];
                         setSelectedCell({ row: newRow, col: newCol });
                         setSelectionRange(null);
+                        setEditingKey(null);
                       }
                     }}
                   />
@@ -550,45 +527,22 @@ export default function ExcelGrid() {
           />
         )}
 
-        {/* Fill handle (small square) */}
-        {selectionOverlay && (
-          <div
-            className="absolute z-20 bg-green-600 border border-white"
-            style={{
-              left: `${selectionOverlay.left + selectionOverlay.width - 5}px`,
-              top: `${selectionOverlay.top + selectionOverlay.height - 5}px`,
-              width: '8px',
-              height: '8px',
-              cursor: 'crosshair',
-            }}
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              if (!selectionBounds) return;
-              fillDragRef.current = {
-                active: true,
-                startRange: { ...selectionBounds },
-                previewEnd: null,
-              };
+        {/* Fill handle component */}
+        {selectionOverlay && selectionBounds && (
+          <FillHandle
+            overlayRect={selectionOverlay}
+            selectionBounds={selectionBounds}
+            clientToCell={clientToCell}
+            getUnionRangeFromDrag={getUnionRangeFromDrag}
+            getRectForBounds={getRectForBounds}
+            onApplyFill={(src, final) => {
+              applyFill(src, final, final.axis);
+              const start = { row: final.startRow, col: columns[final.startColIdx] };
+              const end = { row: final.endRow, col: columns[final.endColIdx] };
+              setSelectionRange({ start, end });
+              setSelectedCell(end);
             }}
           />
-        )}
-
-        {/* Fill preview overlay */}
-        {fillDragRef.current.active && fillDragRef.current.previewEnd && (
-          (() => {
-            const rect = getRectForBounds(fillDragRef.current.previewEnd);
-            return (
-              <div
-                style={{
-                  '--left': `${rect.left}px`,
-                  '--top': `${rect.top}px`,
-                  '--width': `${rect.width}px`,
-                  '--height': `${rect.height}px`,
-                }}
-                className="pointer-events-none absolute border-2 border-blue-500 box-border z-10 left-(--left) top-(--top) w-(--width) h-(--height)"
-              />
-            );
-          })()
         )}
       </div>
     </div>
