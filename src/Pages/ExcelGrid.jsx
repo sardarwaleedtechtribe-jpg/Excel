@@ -492,7 +492,12 @@ export default function ExcelGrid() {
                     const anchor = e.shiftKey ? selectedCell : { row, col };
                     dragAnchorRef.current = anchor;
                     setSelectedCell(anchor);
-                    setSelectionRange({ start: anchor, end: { row, col } });
+                    // Only create selection range for Shift+click or drag; simple click clears range (like arrow keys)
+                    if (e.shiftKey) {
+                      setSelectionRange({ start: anchor, end: { row, col } });
+                    } else {
+                      setSelectionRange(null);
+                    }
                   }}
                   onMouseEnter={() => {
                     // Update selection when dragging
@@ -525,7 +530,32 @@ export default function ExcelGrid() {
                       if (e.key === "Enter") {
                         e.preventDefault();
                         const maxRow = rows.length;
+                        if (e.shiftKey) {
+                          if (row > 1) setSelectedCell({ row: Math.max(row - 1, 1), col });
+                        } else {
+                          if (row < maxRow) setSelectedCell({ row: row + 1, col });
+                        }
+                        return;
+                      }
+
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        const maxRow = rows.length;
                         if (row < maxRow) setSelectedCell({ row: row + 1, col });
+                        return;
+                      }
+
+                      // Handle Tab and Shift+Tab to move right/left like Excel
+                      if (e.key === "Tab") {
+                        e.preventDefault();
+                        const currentColIndex = columns.indexOf(col);
+                        const newColIndex = e.shiftKey
+                          ? Math.max(currentColIndex - 1, 0)
+                          : Math.min(currentColIndex + 1, columns.length - 1);
+                        const newCol = columns[newColIndex];
+                        setSelectedCell({ row, col: newCol });
+                        setSelectionRange(null);
+                        setEditingKey(null);
                         return;
                       }
 
