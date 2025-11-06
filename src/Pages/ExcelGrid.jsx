@@ -18,6 +18,7 @@ export default function ExcelGrid() {
   const [rowHeights, setRowHeights] = useState(
     rows.reduce((acc, row) => ({ ...acc, [row]: 25 }), {})
   );
+  const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
   const inputRefs = useRef({});
   const resizingRef = useRef(null);
   const selectingRef = useRef(false);
@@ -126,6 +127,32 @@ export default function ExcelGrid() {
   };
 
   const selectionOverlay = getSelectionOverlayStyle();
+
+  // Prefer fill preview bounds for header highlighting when dragging the handle
+  const highlightBounds = fillPreviewBounds || selectionBounds;
+
+  // Provide single-cell bounds/overlay so FillHandle shows for a single selected cell
+  const selectedCellBounds = useMemo(() => {
+    if (!selectedCell) return null;
+    const colIdx = columns.indexOf(selectedCell.col);
+    if (colIdx < 0) return null;
+    return {
+      startRow: selectedCell.row,
+      endRow: selectedCell.row,
+      startColIdx: colIdx,
+      endColIdx: colIdx,
+    };
+  }, [selectedCell]);
+
+  const selectedCellOverlay = useMemo(() => {
+    if (!selectedCell) return null;
+    const left = getLeftForCol(selectedCell.col);
+    const top = getTopForRow(selectedCell.row);
+    const width = colWidths[selectedCell.col];
+    const height = rowHeights[selectedCell.row];
+    if (typeof width !== "number" || typeof height !== "number") return null;
+    return { left, top, width, height };
+  }, [selectedCell, colWidths, rowHeights]);
 
   // Formula utilities via external module
   const getRawByKey = (key) => cellContents[key] ?? "";
@@ -375,7 +402,7 @@ export default function ExcelGrid() {
         {/* Column headers */}
         {columns.map((col) => {
           const colIdx = columns.indexOf(col);
-          const isColInRange = !!selectionBounds && colIdx >= selectionBounds.startColIdx && colIdx <= selectionBounds.endColIdx;
+          const isColInRange = !!highlightBounds && colIdx >= highlightBounds.startColIdx && colIdx <= highlightBounds.endColIdx;
           const isActiveCol = selectedCell.col === col || isColInRange;
           return (
             <div
@@ -406,7 +433,7 @@ export default function ExcelGrid() {
             {/* Row header */}
             <div
               className={`relative flex items-center justify-end text-black border border-gray-400 font-semibold pr-1
-                ${(selectedCell.row === row) || (selectionBounds && row >= selectionBounds.startRow && row <= selectionBounds.endRow) ? "bg-green-200 text-green-800" : "bg-gray-100"}`}
+                ${(selectedCell.row === row) || (highlightBounds && row >= highlightBounds.startRow && row <= highlightBounds.endRow) ? "bg-green-200 text-green-800" : "bg-gray-100"}`}
               style={{ height: rowHeights[row] }}
             >
               {row}
@@ -597,11 +624,11 @@ export default function ExcelGrid() {
           />
         )}
 
-        {/* Fill handle component */}
-        {selectionOverlay && selectionBounds && (
+        {/* Fill handle component - also show for single selected cell */}
+        {(selectionOverlay || selectedCellOverlay) && (
           <FillHandle
-            overlayRect={selectionOverlay}
-            selectionBounds={selectionBounds}
+            overlayRect={selectionOverlay || selectedCellOverlay}
+            selectionBounds={selectionBounds || selectedCellBounds}
             clientToCell={clientToCell}
             getUnionRangeFromDrag={getUnionRangeFromDrag}
             getRectForBounds={getRectForBounds}
@@ -612,6 +639,7 @@ export default function ExcelGrid() {
               setSelectionRange({ start, end });
               setSelectedCell(end);
             }}
+            onPreviewChange={(bounds) => setFillPreviewBounds(bounds)}
           />
         )}
       </div>

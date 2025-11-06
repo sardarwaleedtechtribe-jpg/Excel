@@ -7,6 +7,7 @@ export default function FillHandle({
   getUnionRangeFromDrag,
   getRectForBounds,
   onApplyFill, // (srcBounds, finalBounds) => void
+  onPreviewChange, // optional: (previewBounds|null) => void
 }) {
   // use state for preview so we re-render when it changes
   const dragRef = useRef({ active: false, startRange: null });
@@ -19,17 +20,20 @@ export default function FillHandle({
       if (!endCell) return;
       const union = getUnionRangeFromDrag(dragRef.current.startRange, endCell);
       setPreviewBounds(union);
+      if (onPreviewChange) onPreviewChange(union);
     };
     const onMouseUp = () => {
       if (!dragRef.current.active || !dragRef.current.startRange) {
         dragRef.current = { active: false, startRange: null };
         setPreviewBounds(null);
+        if (onPreviewChange) onPreviewChange(null);
         return;
       }
       const src = dragRef.current.startRange;
       const final = previewBounds;
       dragRef.current = { active: false, startRange: null };
       setPreviewBounds(null);
+      if (onPreviewChange) onPreviewChange(null);
       if (!final) return;
       if (
         final.startRow !== src.startRow ||
