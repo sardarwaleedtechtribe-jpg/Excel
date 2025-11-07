@@ -12,6 +12,7 @@ export default function ExcelGrid() {
   const [selectionRange, setSelectionRange] = useState(null); // { start: {row,col}, end: {row,col} }
   const [cellContents, setCellContents] = useState({});
   const [editingKey, setEditingKey] = useState(null);
+  const [editMode, setEditMode] = useState("select");
   const [colWidths, setColWidths] = useState(
     columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {})
   );
@@ -222,6 +223,12 @@ export default function ExcelGrid() {
 
   // Prefer fill preview bounds for header highlighting when dragging the handle
   const highlightBounds = fillPreviewBounds || selectionBounds;
+
+  const editingRawValue =
+    editingKey != null ? cellContents[editingKey] ?? "" : null;
+  const isEditingFormula =
+    typeof editingRawValue === "string" &&
+    editingRawValue.trimStart().startsWith("=");
 
   // Provide single-cell bounds/overlay so FillHandle shows for a single selected cell
   const selectedCellBounds = useMemo(() => {
@@ -589,6 +596,12 @@ export default function ExcelGrid() {
               const isSelected = selectedCell.row === row && selectedCell.col === col;
               const isInRange = isInSelection(row, col);
               const isMultiSelection = !!selectionBounds && (selectionBounds.endRow > selectionBounds.startRow || selectionBounds.endColIdx > selectionBounds.startColIdx);
+              const showActiveBorder =
+                isSelected &&
+                !isEditingFormula &&
+                !(selectionRange &&
+                  (selectionRange.start.row !== selectionRange.end.row ||
+                    selectionRange.start.col !== selectionRange.end.col));
 
               return (
                 <div
@@ -596,9 +609,7 @@ export default function ExcelGrid() {
                   className={`relative 
                     hover:bg-green-100 
                     ${isInRange ? (isSelected && isMultiSelection ? "bg-green-200" : "bg-green-100") : ""}
-                    ${isSelected && !(selectionRange && (selectionRange.start.row !== selectionRange.end.row || selectionRange.start.col !== selectionRange.end.col)) 
-                      ? 'border-2 border-gray-900' 
-                      : 'border border-gray-300'}
+                    ${showActiveBorder ? 'border-2 border-gray-900' : 'border border-gray-300'}
                     -mx-px -mt-px
                     ${isSelected ? 'z-10' : 'z-0'}`}
                   style={{
@@ -715,6 +726,8 @@ export default function ExcelGrid() {
 
                     // Start selection (normal behavior when not inserting into formula)
                     selectingRef.current = true;
+                    setEditMode("select");
+                    setEditingKey(null);
                     const anchor = e.shiftKey ? selectedCell : { row, col };
                     dragAnchorRef.current = anchor;
                     setSelectedCell(anchor);
@@ -724,6 +737,22 @@ export default function ExcelGrid() {
                     } else {
                       setSelectionRange(null);
                     }
+                  }}
+                  onDoubleClick={() => {
+                    const keyHere = `${row}-${col}`;
+                    setSelectedCell({ row, col });
+                    setEditingKey(keyHere);
+                    setEditMode("edit");
+                    setTimeout(() => {
+                      const el = inputRefs.current[keyHere];
+                      if (el) {
+                        el.focus();
+                        try {
+                          const len = el.value ? el.value.length : 0;
+                          el.setSelectionRange(len, len);
+                        } catch (e) {}
+                      }
+                    }, 0);
                   }}
                   onMouseEnter={() => {
                     // Update selection when dragging
@@ -743,16 +772,42 @@ export default function ExcelGrid() {
                         ? (cellContents[`${row}-${col}`] || "")
                         : getDisplayForCell(row, col)
                     }
-                    style={{ lineHeight: `${rowHeights[row]}px` }}
+                    style={{ lineHeight: `${rowHeights[row]}px`, caretColor: (editMode === 'edit' && editingKey === `${row}-${col}`) ? undefined : 'transparent' }}
+                    readOnly={!(editMode === 'edit' && editingKey === `${row}-${col}`)}
                     onChange={(e) =>
                       setCellContents((prev) => ({
                         ...prev,
                         [`${row}-${col}`]: e.target.value,
                       }))
                     }
-                    onFocus={() => setEditingKey(`${row}-${col}`)}
-                    onBlur={() => setEditingKey(null)}
+                    onFocus={() => setSelectedCell({ row, col })}
+                    onBlur={() => { if (editingKey === `${row}-${col}`) setEditingKey(null); setEditMode('select'); }}
                     onKeyDown={(e) => {
+                      const keyHere = `${row}-${col}`;
+                      const inEditHere = editMode === 'edit' && editingKey === keyHere;
+                      if (!inEditHere) {
+                        const isPrintable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
+                        const isErase = e.key === 'Backspace' || e.key === 'Delete';
+                        if (isPrintable || isErase) {
+                          e.preventDefault();
+                          const nextVal = isErase ? '' : e.key;
+                          setCellContents((prev) => ({ ...prev, [keyHere]: nextVal }));
+                          setSelectionRange(null);
+                          setEditingKey(keyHere);
+                          setEditMode('edit');
+                          setTimeout(() => {
+                            const el = inputRefs.current[keyHere];
+                            if (el) {
+                              el.focus();
+                              try {
+                                const caret = (isErase ? 0 : nextVal.length);
+                                el.setSelectionRange(caret, caret);
+                              } catch (_) {}
+                            }
+                          }, 0);
+                          return;
+                        }
+                      }
                       if (e.key === "Enter") {
                         e.preventDefault();
                         const maxRow = rows.length;
@@ -780,27 +835,28 @@ export default function ExcelGrid() {
 
                       const colIndex = columns.indexOf(col);
                       if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key)) {
-                        e.preventDefault();
-                        let newRow = row;
-                        let newColIndex = colIndex;
-                        if (e.key === "ArrowDown")
-                          newRow = Math.min(row + 1, rows.length);
-                        if (e.key === "ArrowUp")
-                          newRow = Math.max(row - 1, 1);
-                        if (e.key === "ArrowRight")
-                          newColIndex = Math.min(colIndex + 1, columns.length - 1);
-                        if (e.key === "ArrowLeft")
-                          newColIndex = Math.max(colIndex - 1, 0);
-                        const newCol = columns[newColIndex];
-                        setSelectedCell({ row: newRow, col: newCol });
-                        setSelectionRange(null);
-                        setEditingKey(null);
+                        if (!inEditHere) {
+                          e.preventDefault();
+                          let newRow = row;
+                          let newColIndex = colIndex;
+                          if (e.key === "ArrowDown")
+                            newRow = Math.min(row + 1, rows.length);
+                          if (e.key === "ArrowUp")
+                            newRow = Math.max(row - 1, 1);
+                          if (e.key === "ArrowRight")
+                            newColIndex = Math.min(colIndex + 1, columns.length - 1);
+                          if (e.key === "ArrowLeft")
+                            newColIndex = Math.max(colIndex - 1, 0);
+                          const newCol = columns[newColIndex];
+                          setSelectedCell({ row: newRow, col: newCol });
+                          setSelectionRange(null);
+                          setEditingKey(null);
+                        }
                       }
 
                       // Track function argument picking within parentheses like Excel
                       // Start picking when user types '(' after a function token or any '('
                       try {
-                        const keyHere = `${row}-${col}`;
                         const el = inputRefs.current[keyHere];
                         const raw = cellContents[keyHere] ?? "";
                         const caret = el && typeof el.selectionStart === 'number' ? el.selectionStart : raw.length;
@@ -832,7 +888,7 @@ export default function ExcelGrid() {
           </React.Fragment>
         ))}
         {/* Selection overlay outline for multi-cell ranges */}
-        {selectionOverlay && (selectionBounds.endRow - selectionBounds.startRow > 0 || selectionBounds.endColIdx - selectionBounds.startColIdx > 0) && (
+        {!isEditingFormula && selectionOverlay && (selectionBounds.endRow - selectionBounds.startRow > 0 || selectionBounds.endColIdx - selectionBounds.startColIdx > 0) && (
           <div
             className="pointer-events-none absolute border-2 border-black box-border z-10"
             style={{
@@ -883,7 +939,7 @@ export default function ExcelGrid() {
         })}
 
         {/* Fill handle component - also show for single selected cell */}
-        {(selectionOverlay || selectedCellOverlay) && (
+        {!isEditingFormula && (selectionOverlay || selectedCellOverlay) && (
           <FillHandle
             overlayRect={selectionOverlay || selectedCellOverlay}
             selectionBounds={selectionBounds || selectedCellBounds}
