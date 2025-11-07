@@ -20,8 +20,9 @@ export default function ExcelGrid() {
   );
   const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
 
-  // Formula reference bounding box (union of all referenced cells) used to show marching-ants
+  // Formula reference bounding box for ranges; and explicit single-cell refs for non-range formulas
   const [formulaRefBounds, setFormulaRefBounds] = useState(null);
+  const [formulaSingleRefs, setFormulaSingleRefs] = useState([]); // array of bounds for A1, B3 ...
 
   const inputRefs = useRef({});
   const resizingRef = useRef(null);
@@ -42,66 +43,86 @@ export default function ExcelGrid() {
     }
   }, [selectedCell]);
 
-  // When editing a formula (leading "="), parse cell refs and compute union bounds to highlight
+  // When editing a formula (leading "="), parse ranges and singles to highlight appropriately
   useEffect(() => {
     if (!editingKey) {
       setFormulaRefBounds(null);
+      setFormulaSingleRefs([]);
       return;
     }
     const raw = cellContents[editingKey] ?? "";
     if (typeof raw !== "string" || !raw.startsWith("=")) {
       setFormulaRefBounds(null);
+      setFormulaSingleRefs([]);
       return;
     }
+    try {
+      const expr = raw.slice(1);
+      const covered = new Set();
+      const ranges = [];
+      const singles = [];
 
-    // Parse references like A1 or A1:B3, support multi-letter columns (A..Z..)
-    const regex = /([A-Z]+)(\d{1,2})(?::([A-Z]+)(\d{1,2}))?/gi;
-    let m;
-    let minRow = Infinity,
-      maxRow = -Infinity,
-      minColIdx = Infinity,
-      maxColIdx = -Infinity;
-    while ((m = regex.exec(raw)) !== null) {
-      const startColLetters = m[1].toUpperCase();
-      const startRow = Number(m[2]);
-      const endColLetters = m[3] ? m[3].toUpperCase() : startColLetters;
-      const endRow = m[4] ? Number(m[4]) : startRow;
-
-      // Convert column letters to index (A -> 0, B -> 1, ..., Z -> 25, AA -> 26, etc.)
+      // Helper to convert letters to index
       const colLettersToIndex = (s) => {
         let idx = 0;
-        for (let i = 0; i < s.length; i++) {
-          idx = idx * 26 + (s.charCodeAt(i) - 64);
-        }
+        for (let i = 0; i < s.length; i++) idx = idx * 26 + (s.charCodeAt(i) - 64);
         return idx - 1;
       };
 
-      const sColIdx = colLettersToIndex(startColLetters);
-      const eColIdx = colLettersToIndex(endColLetters);
+      // 1) Capture ranges first: e.g., A1:B5, AA10:AC12
+      const rangeRe = /\b([A-Z]+)([1-9]\d?)\s*:\s*([A-Z]+)([1-9]\d?)\b/g;
+      let m;
+      while ((m = rangeRe.exec(expr)) !== null) {
+        const sColIdx = colLettersToIndex(m[1].toUpperCase());
+        const eColIdx = colLettersToIndex(m[3].toUpperCase());
+        const sRow = Math.max(1, Math.min(rows.length, Number(m[2])));
+        const eRow = Math.max(1, Math.min(rows.length, Number(m[4])));
+        const startRow = Math.min(sRow, eRow);
+        const endRow = Math.max(sRow, eRow);
+        const startColIdx = Math.max(0, Math.min(columns.length - 1, Math.min(sColIdx, eColIdx)));
+        const endColIdx = Math.max(0, Math.min(columns.length - 1, Math.max(sColIdx, eColIdx)));
+        if (endRow >= startRow && endColIdx >= startColIdx) {
+          ranges.push({ startRow, endRow, startColIdx, endColIdx });
+          for (let i = m.index; i < m.index + m[0].length; i++) covered.add(i);
+        }
+      }
 
-      // clamp to available grid
-      const sRowClamped = Math.max(1, Math.min(rows.length, startRow));
-      const eRowClamped = Math.max(1, Math.min(rows.length, endRow));
-      const rStart = Math.min(sRowClamped, eRowClamped);
-      const rEnd = Math.max(sRowClamped, eRowClamped);
-      const cStart = Math.max(0, Math.min(columns.length - 1, Math.min(sColIdx, eColIdx)));
-      const cEnd = Math.max(0, Math.min(columns.length - 1, Math.max(sColIdx, eColIdx)));
+      // 2) Capture single refs not inside any matched range token: e.g., A1, C7
+      const singleRe = /\b([A-Z]+)([1-9]\d?)\b/g;
+      const seenSingles = new Set();
+      while ((m = singleRe.exec(expr)) !== null) {
+        let overlap = false;
+        for (let i = m.index; i < m.index + m[0].length; i++) {
+          if (covered.has(i)) { overlap = true; break; }
+        }
+        if (overlap) continue;
+        const colIdx = colLettersToIndex(m[1].toUpperCase());
+        const rowNum = Number(m[2]);
+        if (!Number.isFinite(colIdx) || rowNum < 1 || rowNum > rows.length) continue;
+        const cIdx = Math.max(0, Math.min(columns.length - 1, colIdx));
+        const key = `${cIdx}-${rowNum}`;
+        if (seenSingles.has(key)) continue;
+        seenSingles.add(key);
+        singles.push({ startRow: rowNum, endRow: rowNum, startColIdx: cIdx, endColIdx: cIdx });
+      }
 
-      minRow = Math.min(minRow, rStart);
-      maxRow = Math.max(maxRow, rEnd);
-      minColIdx = Math.min(minColIdx, cStart);
-      maxColIdx = Math.max(maxColIdx, cEnd);
-    }
-
-    if (minRow <= maxRow && minColIdx <= maxColIdx) {
-      setFormulaRefBounds({
-        startRow: minRow,
-        endRow: maxRow,
-        startColIdx: minColIdx,
-        endColIdx: maxColIdx,
-      });
-    } else {
+      // Update state: union of ranges for marching-ants; singles for discrete highlights
+      if (ranges.length > 0) {
+        let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+        for (const b of ranges) {
+          minRow = Math.min(minRow, b.startRow);
+          maxRow = Math.max(maxRow, b.endRow);
+          minCol = Math.min(minCol, b.startColIdx);
+          maxCol = Math.max(maxCol, b.endColIdx);
+        }
+        setFormulaRefBounds({ startRow: minRow, endRow: maxRow, startColIdx: minCol, endColIdx: maxCol });
+      } else {
+        setFormulaRefBounds(null);
+      }
+      setFormulaSingleRefs(singles);
+    } catch (err) {
       setFormulaRefBounds(null);
+      setFormulaSingleRefs([]);
     }
   }, [editingKey, cellContents]);
 
@@ -723,7 +744,7 @@ export default function ExcelGrid() {
           />
         )}
 
-        {/* If editing a formula and there are referenced cells, show a union marching-ants border around them */}
+        {/* If editing a formula and there are range references, show a union marching-ants border around them */}
         {formulaRefBounds && (
           (() => {
             const rect = getRectForBounds(formulaRefBounds);
@@ -741,6 +762,25 @@ export default function ExcelGrid() {
             );
           })()
         )}
+
+        {/* If editing a formula and there are explicit single refs (e.g., =A1+A4), draw discrete borders per cell */}
+        {formulaSingleRefs && formulaSingleRefs.length > 0 && formulaSingleRefs.map((b, i) => {
+          const rect = getRectForBounds(b);
+          if (!rect) return null;
+          return (
+            <MarqueeBorder
+              key={`single-ref-${i}`}
+              left={rect.left}
+              top={rect.top}
+              width={rect.width}
+              height={rect.height}
+              color="#3b82f6"
+              strokeWidth={2}
+              dashArray="8 4"
+              zIndex={80}
+            />
+          );
+        })}
 
         {/* Fill handle component - also show for single selected cell */}
         {(selectionOverlay || selectedCellOverlay) && (
