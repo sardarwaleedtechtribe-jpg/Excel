@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createFormulaUtils } from "../utils/formulas";
 import FillHandle from "../Components/FillHandle";
 
-const columns = Array.from({ length: 18 }, (_, i) =>
+const columns = Array.from({ length: 26 }, (_, i) =>
   String.fromCharCode(65 + i)
-)
+);
 const rows = Array.from({ length: 27 }, (_, i) => i + 1);
 
 export default function ExcelGrid() {
@@ -19,28 +19,15 @@ export default function ExcelGrid() {
     rows.reduce((acc, row) => ({ ...acc, [row]: 25 }), {})
   );
   const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
-  // new state: mapping of `${row}-${col}` -> color (hex) for current editing formula references
-  const [formulaRefMap, setFormulaRefMap] = useState({});
-  // groups to display small chips with labels and color order (helps user see mapping)
-  const [formulaRefGroups, setFormulaRefGroups] = useState([]);
+
+  // Formula reference bounding box (union of all referenced cells) used to show marching-ants
+  const [formulaRefBounds, setFormulaRefBounds] = useState(null);
+
   const inputRefs = useRef({});
   const resizingRef = useRef(null);
   const selectingRef = useRef(false);
   const dragAnchorRef = useRef(null);
   const containerRef = useRef(null);
-  // moved fill handle drag state into FillHandle component
-
-  // colors to use for referenced tokens (order matters)
-  const refColors = [
-    "#3b82f6", // blue
-    "#ef4444", // red
-    "#10b981", // green
-    "#f59e0b", // amber
-    "#8b5cf6", // purple
-    "#06b6d4", // cyan
-    "#ec4899", // pink
-    "#9ca3af", // gray
-  ];
 
   // Autofocus selected cell
   useEffect(() => {
@@ -55,62 +42,67 @@ export default function ExcelGrid() {
     }
   }, [selectedCell]);
 
-  // Parse references in the currently edited formula and create a color map
+  // When editing a formula (leading "="), parse cell refs and compute union bounds to highlight
   useEffect(() => {
     if (!editingKey) {
-      setFormulaRefMap({});
-      setFormulaRefGroups([]);
+      setFormulaRefBounds(null);
       return;
     }
     const raw = cellContents[editingKey] ?? "";
     if (typeof raw !== "string" || !raw.startsWith("=")) {
-      setFormulaRefMap({});
-      setFormulaRefGroups([]);
+      setFormulaRefBounds(null);
       return;
     }
 
-    // Parse tokens like A1 or A1:B3 (columns A..R, rows 1..99-ish)
-    const regex = /([A-R])(\d{1,2})(?::([A-R])(\d{1,2}))?/gi;
-    const map = {};
-    const groups = [];
+    // Parse references like A1 or A1:B3, support multi-letter columns (A..Z..)
+    const regex = /([A-Z]+)(\d{1,2})(?::([A-Z]+)(\d{1,2}))?/gi;
     let m;
-    let idx = 0;
+    let minRow = Infinity,
+      maxRow = -Infinity,
+      minColIdx = Infinity,
+      maxColIdx = -Infinity;
     while ((m = regex.exec(raw)) !== null) {
-      const startCol = m[1].toUpperCase();
+      const startColLetters = m[1].toUpperCase();
       const startRow = Number(m[2]);
-      const endCol = m[3] ? m[3].toUpperCase() : startCol;
+      const endColLetters = m[3] ? m[3].toUpperCase() : startColLetters;
       const endRow = m[4] ? Number(m[4]) : startRow;
 
-      const sColIdx = columns.indexOf(startCol);
-      const eColIdx = columns.indexOf(endCol);
-      if (sColIdx === -1 || eColIdx === -1) continue;
+      // Convert column letters to index (A -> 0, B -> 1, ..., Z -> 25, AA -> 26, etc.)
+      const colLettersToIndex = (s) => {
+        let idx = 0;
+        for (let i = 0; i < s.length; i++) {
+          idx = idx * 26 + (s.charCodeAt(i) - 64);
+        }
+        return idx - 1;
+      };
 
-      // clamp rows to available grid
+      const sColIdx = colLettersToIndex(startColLetters);
+      const eColIdx = colLettersToIndex(endColLetters);
+
+      // clamp to available grid
       const sRowClamped = Math.max(1, Math.min(rows.length, startRow));
       const eRowClamped = Math.max(1, Math.min(rows.length, endRow));
-
       const rStart = Math.min(sRowClamped, eRowClamped);
       const rEnd = Math.max(sRowClamped, eRowClamped);
-      const cStart = Math.min(sColIdx, eColIdx);
-      const cEnd = Math.max(sColIdx, eColIdx);
+      const cStart = Math.max(0, Math.min(columns.length - 1, Math.min(sColIdx, eColIdx)));
+      const cEnd = Math.max(0, Math.min(columns.length - 1, Math.max(sColIdx, eColIdx)));
 
-      const color = refColors[idx % refColors.length];
-      const label = m[0].toUpperCase();
-      const cells = [];
-      for (let r = rStart; r <= rEnd; r++) {
-        for (let c = cStart; c <= cEnd; c++) {
-          const key = `${r}-${columns[c]}`;
-          // assign only if not already assigned (first token wins)
-          if (!map[key]) map[key] = color;
-          cells.push(key);
-        }
-      }
-      groups.push({ color, label, cells });
-      idx++;
+      minRow = Math.min(minRow, rStart);
+      maxRow = Math.max(maxRow, rEnd);
+      minColIdx = Math.min(minColIdx, cStart);
+      maxColIdx = Math.max(maxColIdx, cEnd);
     }
 
-    setFormulaRefMap(map);
-    setFormulaRefGroups(groups);
+    if (minRow <= maxRow && minColIdx <= maxColIdx) {
+      setFormulaRefBounds({
+        startRow: minRow,
+        endRow: maxRow,
+        startColIdx: minColIdx,
+        endColIdx: maxColIdx,
+      });
+    } else {
+      setFormulaRefBounds(null);
+    }
   }, [editingKey, cellContents]);
 
   // Handle mouse move for resizing
@@ -190,7 +182,6 @@ export default function ExcelGrid() {
     if (!selectionBounds) return null;
     const { startRow, endRow, startColIdx, endColIdx } = selectionBounds;
     const startCol = columns[startColIdx];
-    const endCol = columns[endColIdx];
     const left = getLeftForCol(startCol);
     const top = getTopForRow(startRow);
     let width = 0;
@@ -311,7 +302,6 @@ export default function ExcelGrid() {
 
   const getRectForBounds = (bounds) => {
     const startCol = columns[bounds.startColIdx];
-    const endCol = columns[bounds.endColIdx];
     const left = getLeftForCol(startCol);
     const top = getTopForRow(bounds.startRow);
     let width = 0;
@@ -415,7 +405,7 @@ export default function ExcelGrid() {
         if (ext.endColIdx > src.endColIdx) {
           let seqIndex = 0;
           let current = allNums ? Number(sourceVals[sourceVals.length - 1]) : null;
-          for (let c = src.endColIdx + 1; c <= ext.endColIdx; c++) {
+          for (let c = src.startColIdx + 1; c <= ext.endColIdx; c++) {
             let value;
             if (allNums && sourceVals.length >= 1) {
               value = step !== 0 && sourceVals.length >= 2 ? String(current + step) : String(Number(sourceVals[seqIndex % sourceVals.length]));
@@ -454,10 +444,52 @@ export default function ExcelGrid() {
     }
   };
 
-  // Fill handle listeners handled inside FillHandle component
+  // Marquee (marching-ants) SVG rectangle. Uses a CSS animation on stroke-dashoffset.
+  const MarqueeBorder = ({ left, top, width, height, color = "black", strokeWidth = 2, dashArray = "6 4", zIndex = 60 }) => {
+    if (width == null || height == null) return null;
+    // Padding so stroke is fully visible (stroke is centered on rect path)
+    const pad = strokeWidth;
+    const svgW = Math.max(0, width + pad * 2);
+    const svgH = Math.max(0, height + pad * 2);
+    return (
+      <svg
+        className="pointer-events-none absolute"
+        style={{
+          left: left - pad,
+          top: top - pad,
+          width: svgW,
+          height: svgH,
+          overflow: "visible",
+          zIndex,
+        }}
+      >
+        <rect
+          x={pad / 2}
+          y={pad / 2}
+          width={Math.max(0, width + (pad - strokeWidth))}
+          height={Math.max(0, height + (pad - strokeWidth))}
+          fill="none"
+          stroke={color}
+          strokeWidth={strokeWidth}
+          strokeDasharray={dashArray}
+          style={{ vectorEffect: "non-scaling-stroke", animation: "dash 1s linear infinite" }}
+        />
+      </svg>
+    );
+  };
+
+  // CSS keyframes for marching ants. We'll inject a small style tag to ensure the animation exists.
+  const marchingAntsStyle = `
+    @keyframes dash {
+      to { stroke-dashoffset: -20; }
+    }
+  `;
 
   return (
     <div className="bg-gray-100 min-h-screen flex items-start justify-start overflow-auto">
+      {/* Inject marching-ants keyframes */}
+      <style>{marchingAntsStyle}</style>
+
       <div
         className="grid border select-none relative"
         style={{
@@ -531,13 +563,9 @@ export default function ExcelGrid() {
               const isInRange = isInSelection(row, col);
               const isMultiSelection = !!selectionBounds && (selectionBounds.endRow > selectionBounds.startRow || selectionBounds.endColIdx > selectionBounds.startColIdx);
 
-              const cellKey = `${row}-${col}`;
-              // color for this cell if it's referenced by the currently edited formula
-              const refColor = formulaRefMap[cellKey];
-
               return (
                 <div
-                  key={cellKey}
+                  key={`${row}-${col}`}
                   className={`relative 
                     hover:bg-green-100 
                     ${isInRange ? (isSelected && isMultiSelection ? "bg-green-200" : "bg-green-100") : ""}
@@ -582,7 +610,7 @@ export default function ExcelGrid() {
                           }
                         }, 0);
 
-                        // visually highlight the referenced cell
+                        // visually highlight the referenced cell (single)
                         setSelectionRange({ start: { row, col }, end: { row, col } });
 
                         // keep selectedCell on the cell being edited
@@ -614,22 +642,22 @@ export default function ExcelGrid() {
                   }}
                 >
                   <input
-                    ref={(el) => (inputRefs.current[cellKey] = el)}
+                    ref={(el) => (inputRefs.current[`${row}-${col}`] = el)}
                     type="text"
                     className="w-full h-full bg-transparent items-end text-left cursor-cell focus:outline-none px-1 "
                     value={
-                      editingKey === cellKey
-                        ? (cellContents[cellKey] || "")
+                      editingKey === `${row}-${col}`
+                        ? (cellContents[`${row}-${col}`] || "")
                         : getDisplayForCell(row, col)
                     }
-                    style={{ lineHeight: `${rowHeights[row]}px`, position: "relative", zIndex: 2 }}
+                    style={{ lineHeight: `${rowHeights[row]}px` }}
                     onChange={(e) =>
                       setCellContents((prev) => ({
                         ...prev,
                         [`${row}-${col}`]: e.target.value,
                       }))
                     }
-                    onFocus={() => setEditingKey(cellKey)}
+                    onFocus={() => setEditingKey(`${row}-${col}`)}
                     onBlur={() => setEditingKey(null)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
@@ -640,13 +668,6 @@ export default function ExcelGrid() {
                         } else {
                           if (row < maxRow) setSelectedCell({ row: row + 1, col });
                         }
-                        return;
-                      }
-
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        const maxRow = rows.length;
-                        if (row < maxRow) setSelectedCell({ row: row + 1, col });
                         return;
                       }
 
@@ -684,24 +705,6 @@ export default function ExcelGrid() {
                       }
                     }}
                   />
-                  {/* Colored translucent overlay instead of a border when cell is referenced in formula */}
-                  {refColor && (
-                    <div
-                      className="pointer-events-none absolute inset-0"
-                      style={{ backgroundColor: refColor, opacity: 0.12, zIndex: 1 }}
-                    />
-                  )}
-                  {/* If this cell is the one being edited and there are formula reference groups,
-                      show small color chips in the top-right to indicate mapping of tokens -> colors */}
-                  {editingKey === cellKey && formulaRefGroups.length > 0 && (
-                    <div style={{ position: "absolute", top: 2, right: 4, display: "flex", gap: 6, alignItems: "center", zIndex: 40 }}>
-                      {formulaRefGroups.map((g, i) => (
-                        <div key={i} title={g.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <div style={{ width: 12, height: 12, backgroundColor: g.color, borderRadius: 2, border: "1px solid rgba(0,0,0,0.15)" }} />
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -718,6 +721,25 @@ export default function ExcelGrid() {
               height: selectionOverlay.height,
             }}
           />
+        )}
+
+        {/* If editing a formula and there are referenced cells, show a union marching-ants border around them */}
+        {formulaRefBounds && (
+          (() => {
+            const rect = getRectForBounds(formulaRefBounds);
+            return (
+              <MarqueeBorder
+                left={rect.left}
+                top={rect.top}
+                width={rect.width}
+                height={rect.height}
+                color="#3b82f6" /* blue */
+                strokeWidth={2}
+                dashArray="8 4"
+                zIndex={80}
+              />
+            );
+          })()
         )}
 
         {/* Fill handle component - also show for single selected cell */}
@@ -742,4 +764,4 @@ export default function ExcelGrid() {
     </div>
   );
 }
-// WORKING
+// WORKING (with marching ants border for selection & formula references)
