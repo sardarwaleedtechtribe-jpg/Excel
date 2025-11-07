@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createFormulaUtils } from "../utils/formulas";
 import FillHandle from "../Components/FillHandle";
 
-const columns = Array.from({ length: 26 }, (_, i) =>
+const columns = Array.from({ length: 18 }, (_, i) =>
   String.fromCharCode(65 + i)
 )
 const rows = Array.from({ length: 27 }, (_, i) => i + 1);
@@ -19,12 +19,28 @@ export default function ExcelGrid() {
     rows.reduce((acc, row) => ({ ...acc, [row]: 25 }), {})
   );
   const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
+  // new state: mapping of `${row}-${col}` -> color (hex) for current editing formula references
+  const [formulaRefMap, setFormulaRefMap] = useState({});
+  // groups to display small chips with labels and color order (helps user see mapping)
+  const [formulaRefGroups, setFormulaRefGroups] = useState([]);
   const inputRefs = useRef({});
   const resizingRef = useRef(null);
   const selectingRef = useRef(false);
   const dragAnchorRef = useRef(null);
   const containerRef = useRef(null);
   // moved fill handle drag state into FillHandle component
+
+  // colors to use for referenced tokens (order matters)
+  const refColors = [
+    "#3b82f6", // blue
+    "#ef4444", // red
+    "#10b981", // green
+    "#f59e0b", // amber
+    "#8b5cf6", // purple
+    "#06b6d4", // cyan
+    "#ec4899", // pink
+    "#9ca3af", // gray
+  ];
 
   // Autofocus selected cell
   useEffect(() => {
@@ -38,6 +54,64 @@ export default function ExcelGrid() {
       } catch (e) {}
     }
   }, [selectedCell]);
+
+  // Parse references in the currently edited formula and create a color map
+  useEffect(() => {
+    if (!editingKey) {
+      setFormulaRefMap({});
+      setFormulaRefGroups([]);
+      return;
+    }
+    const raw = cellContents[editingKey] ?? "";
+    if (typeof raw !== "string" || !raw.startsWith("=")) {
+      setFormulaRefMap({});
+      setFormulaRefGroups([]);
+      return;
+    }
+
+    // Parse tokens like A1 or A1:B3 (columns A..R, rows 1..99-ish)
+    const regex = /([A-R])(\d{1,2})(?::([A-R])(\d{1,2}))?/gi;
+    const map = {};
+    const groups = [];
+    let m;
+    let idx = 0;
+    while ((m = regex.exec(raw)) !== null) {
+      const startCol = m[1].toUpperCase();
+      const startRow = Number(m[2]);
+      const endCol = m[3] ? m[3].toUpperCase() : startCol;
+      const endRow = m[4] ? Number(m[4]) : startRow;
+
+      const sColIdx = columns.indexOf(startCol);
+      const eColIdx = columns.indexOf(endCol);
+      if (sColIdx === -1 || eColIdx === -1) continue;
+
+      // clamp rows to available grid
+      const sRowClamped = Math.max(1, Math.min(rows.length, startRow));
+      const eRowClamped = Math.max(1, Math.min(rows.length, endRow));
+
+      const rStart = Math.min(sRowClamped, eRowClamped);
+      const rEnd = Math.max(sRowClamped, eRowClamped);
+      const cStart = Math.min(sColIdx, eColIdx);
+      const cEnd = Math.max(sColIdx, eColIdx);
+
+      const color = refColors[idx % refColors.length];
+      const label = m[0].toUpperCase();
+      const cells = [];
+      for (let r = rStart; r <= rEnd; r++) {
+        for (let c = cStart; c <= cEnd; c++) {
+          const key = `${r}-${columns[c]}`;
+          // assign only if not already assigned (first token wins)
+          if (!map[key]) map[key] = color;
+          cells.push(key);
+        }
+      }
+      groups.push({ color, label, cells });
+      idx++;
+    }
+
+    setFormulaRefMap(map);
+    setFormulaRefGroups(groups);
+  }, [editingKey, cellContents]);
 
   // Handle mouse move for resizing
   useEffect(() => {
@@ -457,9 +531,13 @@ export default function ExcelGrid() {
               const isInRange = isInSelection(row, col);
               const isMultiSelection = !!selectionBounds && (selectionBounds.endRow > selectionBounds.startRow || selectionBounds.endColIdx > selectionBounds.startColIdx);
 
+              const cellKey = `${row}-${col}`;
+              // color for this cell if it's referenced by the currently edited formula
+              const refColor = formulaRefMap[cellKey];
+
               return (
                 <div
-                  key={`${row}-${col}`}
+                  key={cellKey}
                   className={`relative 
                     hover:bg-green-100 
                     ${isInRange ? (isSelected && isMultiSelection ? "bg-green-200" : "bg-green-100") : ""}
@@ -536,22 +614,22 @@ export default function ExcelGrid() {
                   }}
                 >
                   <input
-                    ref={(el) => (inputRefs.current[`${row}-${col}`] = el)}
+                    ref={(el) => (inputRefs.current[cellKey] = el)}
                     type="text"
                     className="w-full h-full bg-transparent items-end text-left cursor-cell focus:outline-none px-1 "
                     value={
-                      editingKey === `${row}-${col}`
-                        ? (cellContents[`${row}-${col}`] || "")
+                      editingKey === cellKey
+                        ? (cellContents[cellKey] || "")
                         : getDisplayForCell(row, col)
                     }
-                    style={{ lineHeight: `${rowHeights[row]}px` }}
+                    style={{ lineHeight: `${rowHeights[row]}px`, position: "relative", zIndex: 2 }}
                     onChange={(e) =>
                       setCellContents((prev) => ({
                         ...prev,
                         [`${row}-${col}`]: e.target.value,
                       }))
                     }
-                    onFocus={() => setEditingKey(`${row}-${col}`)}
+                    onFocus={() => setEditingKey(cellKey)}
                     onBlur={() => setEditingKey(null)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
@@ -606,6 +684,24 @@ export default function ExcelGrid() {
                       }
                     }}
                   />
+                  {/* Colored translucent overlay instead of a border when cell is referenced in formula */}
+                  {refColor && (
+                    <div
+                      className="pointer-events-none absolute inset-0"
+                      style={{ backgroundColor: refColor, opacity: 0.12, zIndex: 1 }}
+                    />
+                  )}
+                  {/* If this cell is the one being edited and there are formula reference groups,
+                      show small color chips in the top-right to indicate mapping of tokens -> colors */}
+                  {editingKey === cellKey && formulaRefGroups.length > 0 && (
+                    <div style={{ position: "absolute", top: 2, right: 4, display: "flex", gap: 6, alignItems: "center", zIndex: 40 }}>
+                      {formulaRefGroups.map((g, i) => (
+                        <div key={i} title={g.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{ width: 12, height: 12, backgroundColor: g.color, borderRadius: 2, border: "1px solid rgba(0,0,0,0.15)" }} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
