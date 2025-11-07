@@ -1,0 +1,9 @@
+=A1+B1
+=A1*2
+=SUM(A1:A5)
+=AVG(B1:B10)
+=MIN(C1:C20)
+=MAX(A1, B1, C1)
+=SUM(A1:A5)/5
+=(A1+B1)*2
+=SUM(A1:A3, B1:B3)

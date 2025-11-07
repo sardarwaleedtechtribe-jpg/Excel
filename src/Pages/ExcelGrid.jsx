@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createFormulaUtils } from "../utils/formulas";
 import FillHandle from "../Components/FillHandle";
 
-const columns = Array.from({ length: 18 }, (_, i) =>
+const columns = Array.from({ length: 26 }, (_, i) =>
   String.fromCharCode(65 + i)
 )
 const rows = Array.from({ length: 27 }, (_, i) => i + 1);
