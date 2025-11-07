@@ -618,109 +618,128 @@ export default function ExcelGrid() {
                   }}
                   onMouseDown={(e) => {
                     // If we're editing another cell that contains a formula (starts with '='),
-                    // insert the clicked cell reference into that formula at the caret instead
+                    // optionally insert the clicked cell reference into that formula at the caret instead
                     const clickedKey = `${row}-${col}`;
                     const currentEditingKey = editingKey;
                     if (currentEditingKey && currentEditingKey !== clickedKey) {
                       const rawEditing = cellContents[currentEditingKey] ?? "";
                       if (typeof rawEditing === "string" && rawEditing.startsWith("=")) {
-                        e.preventDefault();
-                        e.stopPropagation();
-
-                        // compute caret/selection in the editing input (if available)
                         const editEl = inputRefs.current[currentEditingKey];
                         const selStart = editEl && typeof editEl.selectionStart === "number" ? editEl.selectionStart : rawEditing.length;
                         const selEnd = editEl && typeof editEl.selectionEnd === "number" ? editEl.selectionEnd : selStart;
 
-                        const ref = `${col}${row}`;
+                        const hasSelection = selEnd > selStart;
 
-                        // If we are in function picking mode for this editing cell, constrain insertion
-                        if (formulaPick && formulaPick.key === currentEditingKey) {
-                          // Determine current parameter substring boundaries: from paramStart to next ')' or ','
-                          const paramStart = Math.min(formulaPick.paramStart ?? 0, rawEditing.length);
-                          let scanIdx = paramStart;
-                          let paramEnd = rawEditing.length;
-                          for (let i = paramStart; i < rawEditing.length; i++) {
-                            const ch = rawEditing[i];
-                            if (ch === ')' || ch === ',') { paramEnd = i; break; }
+                        const getPrevNonWhitespaceChar = (value, index) => {
+                          for (let i = index - 1; i >= 0; i--) {
+                            const ch = value[i];
+                            if (ch && !/\s/.test(ch)) return ch;
                           }
+                          return undefined;
+                        };
 
-                          const segment = rawEditing.slice(paramStart, paramEnd);
-                          const colonIdx = segment.indexOf(':');
+                        const triggers = new Set(["=", "+", "-", "*", "/", "^", ":", ",", "("]);
+                        const prevChar = getPrevNonWhitespaceChar(rawEditing, selStart);
+                        const shouldInsertRef =
+                          (formulaPick && formulaPick.key === currentEditingKey) ||
+                          hasSelection ||
+                          prevChar === undefined ||
+                          triggers.has(prevChar);
 
-                          let newSegment;
-                          let newCaretOffsetFromStart;
-                          if (formulaPick.stage === 'start') {
-                            // Replace entire segment up to ':'/end with the single ref
-                            newSegment = ref + (colonIdx >= 0 ? segment.slice(colonIdx) : segment.slice(segment.length));
-                            newCaretOffsetFromStart = ref.length + (colonIdx >= 0 ? segment.length - segment.length : 0);
-                            // Highlight single cell
-                            setSelectionRange({ start: { row, col }, end: { row, col } });
-                            setFormulaPick((prev) => prev ? { ...prev, startCell: { row, col } } : prev);
-                          } else {
-                            // stage === 'end' -> ensure a ':' exists and replace the part after ':' with ref
-                            if (colonIdx === -1) {
-                              newSegment = (formulaPick.startCell ? `${formulaPick.startCell.col}${formulaPick.startCell.row}` : '') + ':' + ref;
-                            } else {
-                              newSegment = segment.slice(0, colonIdx + 1) + ref;
+                        if (shouldInsertRef) {
+                          e.preventDefault();
+                          e.stopPropagation();
+
+                          const ref = `${col}${row}`;
+
+                          // If we are in function picking mode for this editing cell, constrain insertion
+                          if (formulaPick && formulaPick.key === currentEditingKey) {
+                            // Determine current parameter substring boundaries: from paramStart to next ')' or ','
+                            const paramStart = Math.min(formulaPick.paramStart ?? 0, rawEditing.length);
+                            let scanIdx = paramStart;
+                            let paramEnd = rawEditing.length;
+                            for (let i = paramStart; i < rawEditing.length; i++) {
+                              const ch = rawEditing[i];
+                              if (ch === ')' || ch === ',') { paramEnd = i; break; }
                             }
-                            newCaretOffsetFromStart = newSegment.length;
 
-                            // Highlight range from startCell to clicked
-                            const start = formulaPick.startCell || { row, col };
-                            const startColIdx = columns.indexOf(start.col);
-                            const endColIdx = columns.indexOf(col);
-                            const b = {
-                              startRow: Math.min(start.row, row),
-                              endRow: Math.max(start.row, row),
-                              startColIdx: Math.min(startColIdx, endColIdx),
-                              endColIdx: Math.max(startColIdx, endColIdx),
-                            };
-                            const startCellForRange = { row: b.startRow, col: columns[b.startColIdx] };
-                            const endCellForRange = { row: b.endRow, col: columns[b.endColIdx] };
-                            setSelectionRange({ start: startCellForRange, end: endCellForRange });
+                            const segment = rawEditing.slice(paramStart, paramEnd);
+                            const colonIdx = segment.indexOf(':');
+
+                            let newSegment;
+                            let newCaretOffsetFromStart;
+                            if (formulaPick.stage === 'start') {
+                              // Replace entire segment up to ':'/end with the single ref
+                              newSegment = ref + (colonIdx >= 0 ? segment.slice(colonIdx) : segment.slice(segment.length));
+                              newCaretOffsetFromStart = ref.length + (colonIdx >= 0 ? segment.length - segment.length : 0);
+                              // Highlight single cell
+                              setSelectionRange({ start: { row, col }, end: { row, col } });
+                              setFormulaPick((prev) => prev ? { ...prev, startCell: { row, col } } : prev);
+                            } else {
+                              // stage === 'end' -> ensure a ':' exists and replace the part after ':' with ref
+                              if (colonIdx === -1) {
+                                newSegment = (formulaPick.startCell ? `${formulaPick.startCell.col}${formulaPick.startCell.row}` : '') + ':' + ref;
+                              } else {
+                                newSegment = segment.slice(0, colonIdx + 1) + ref;
+                              }
+                              newCaretOffsetFromStart = newSegment.length;
+
+                              // Highlight range from startCell to clicked
+                              const start = formulaPick.startCell || { row, col };
+                              const startColIdx = columns.indexOf(start.col);
+                              const endColIdx = columns.indexOf(col);
+                              const b = {
+                                startRow: Math.min(start.row, row),
+                                endRow: Math.max(start.row, row),
+                                startColIdx: Math.min(startColIdx, endColIdx),
+                                endColIdx: Math.max(startColIdx, endColIdx),
+                              };
+                              const startCellForRange = { row: b.startRow, col: columns[b.startColIdx] };
+                              const endCellForRange = { row: b.endRow, col: columns[b.endColIdx] };
+                              setSelectionRange({ start: startCellForRange, end: endCellForRange });
+                            }
+
+                            const newRaw = rawEditing.slice(0, paramStart) + newSegment + rawEditing.slice(paramEnd);
+                            setCellContents((prev) => ({ ...prev, [currentEditingKey]: newRaw }));
+
+                            // keep focus and caret on the original editing cell
+                            setTimeout(() => {
+                              const el = inputRefs.current[currentEditingKey];
+                              if (el) {
+                                el.focus();
+                                try {
+                                  const caret = paramStart + newCaretOffsetFromStart;
+                                  el.setSelectionRange(caret, caret);
+                                } catch (err) {}
+                              }
+                            }, 0);
+
+                            // keep selectedCell on the cell being edited
+                            const [editRowStr, editCol] = currentEditingKey.split("-");
+                            setSelectedCell({ row: Number(editRowStr), col: editCol });
+                            return;
                           }
 
-                          const newRaw = rawEditing.slice(0, paramStart) + newSegment + rawEditing.slice(paramEnd);
+                          // Default behavior (not in constrained picking)
+                          const newRaw = rawEditing.slice(0, selStart) + ref + rawEditing.slice(selEnd);
                           setCellContents((prev) => ({ ...prev, [currentEditingKey]: newRaw }));
 
-                          // keep focus and caret on the original editing cell
                           setTimeout(() => {
                             const el = inputRefs.current[currentEditingKey];
                             if (el) {
                               el.focus();
                               try {
-                                const caret = paramStart + newCaretOffsetFromStart;
-                                el.setSelectionRange(caret, caret);
+                                el.setSelectionRange(selStart + ref.length, selStart + ref.length);
                               } catch (err) {}
                             }
                           }, 0);
 
-                          // keep selectedCell on the cell being edited
+                          setSelectionRange({ start: { row, col }, end: { row, col } });
+
                           const [editRowStr, editCol] = currentEditingKey.split("-");
                           setSelectedCell({ row: Number(editRowStr), col: editCol });
                           return;
                         }
-
-                        // Default behavior (not in constrained picking)
-                        const newRaw = rawEditing.slice(0, selStart) + ref + rawEditing.slice(selEnd);
-                        setCellContents((prev) => ({ ...prev, [currentEditingKey]: newRaw }));
-
-                        setTimeout(() => {
-                          const el = inputRefs.current[currentEditingKey];
-                          if (el) {
-                            el.focus();
-                            try {
-                              el.setSelectionRange(selStart + ref.length, selStart + ref.length);
-                            } catch (err) {}
-                          }
-                        }, 0);
-
-                        setSelectionRange({ start: { row, col }, end: { row, col } });
-
-                        const [editRowStr, editCol] = currentEditingKey.split("-");
-                        setSelectedCell({ row: Number(editRowStr), col: editCol });
-                        return;
                       }
                     }
 
