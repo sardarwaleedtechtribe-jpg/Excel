@@ -13,6 +13,7 @@ export default function ExcelGrid() {
   const [cellContents, setCellContents] = useState({});
   const [editingKey, setEditingKey] = useState(null);
   const [editMode, setEditMode] = useState("select");
+  const [isDoubleClickEdit, setIsDoubleClickEdit] = useState(false); // Track if edit mode was entered via double-click
   const [colWidths, setColWidths] = useState(
     columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {})
   );
@@ -747,6 +748,7 @@ export default function ExcelGrid() {
                     selectingRef.current = true;
                     setEditMode("select");
                     setEditingKey(null);
+                    setIsDoubleClickEdit(false);
                     const anchor = e.shiftKey ? selectedCell : { row, col };
                     dragAnchorRef.current = anchor;
                     setSelectedCell(anchor);
@@ -762,6 +764,7 @@ export default function ExcelGrid() {
                     setSelectedCell({ row, col });
                     setEditingKey(keyHere);
                     setEditMode("edit");
+                    setIsDoubleClickEdit(true); // Mark as double-click edit mode
                     setTimeout(() => {
                       const el = inputRefs.current[keyHere];
                       if (el) {
@@ -800,7 +803,13 @@ export default function ExcelGrid() {
                       }))
                     }
                     onFocus={() => setSelectedCell({ row, col })}
-                    onBlur={() => { if (editingKey === `${row}-${col}`) setEditingKey(null); setEditMode('select'); }}
+                    onBlur={() => { 
+                      if (editingKey === `${row}-${col}`) {
+                        setEditingKey(null); 
+                        setEditMode('select');
+                        setIsDoubleClickEdit(false);
+                      }
+                    }}
                     onKeyDown={(e) => {
                       const keyHere = `${row}-${col}`;
                       const inEditHere = editMode === 'edit' && editingKey === keyHere;
@@ -814,6 +823,7 @@ export default function ExcelGrid() {
                           setSelectionRange(null);
                           setEditingKey(keyHere);
                           setEditMode('edit');
+                          setIsDoubleClickEdit(false); // Mark as single-click+type edit mode
                           setTimeout(() => {
                             const el = inputRefs.current[keyHere];
                             if (el) {
@@ -835,6 +845,12 @@ export default function ExcelGrid() {
                         } else {
                           if (row < maxRow) setSelectedCell({ row: row + 1, col });
                         }
+                        // Exit edit mode when pressing Enter
+                        if (inEditHere) {
+                          setEditingKey(null);
+                          setEditMode("select");
+                          setIsDoubleClickEdit(false);
+                        }
                         return;
                       }
 
@@ -849,12 +865,16 @@ export default function ExcelGrid() {
                         setSelectedCell({ row, col: newCol });
                         setSelectionRange(null);
                         setEditingKey(null);
+                        setEditMode("select");
+                        setIsDoubleClickEdit(false);
                         return;
                       }
 
                       const colIndex = columns.indexOf(col);
                       if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key)) {
-                        if (!inEditHere) {
+                        // If in edit mode but NOT from double-click, arrow keys should move between cells
+                        // If in edit mode from double-click, allow default behavior (cursor moves within cell)
+                        if (!inEditHere || (inEditHere && !isDoubleClickEdit)) {
                           e.preventDefault();
                           let newRow = row;
                           let newColIndex = colIndex;
@@ -870,7 +890,10 @@ export default function ExcelGrid() {
                           setSelectedCell({ row: newRow, col: newCol });
                           setSelectionRange(null);
                           setEditingKey(null);
+                          setEditMode("select");
+                          setIsDoubleClickEdit(false);
                         }
+                        // If inEditHere && isDoubleClickEdit, allow default behavior (cursor moves within cell)
                       }
 
                       // Track function argument picking within parentheses like Excel
