@@ -416,6 +416,94 @@ export default function ExcelGrid() {
     return `${pattern.prefix}${pattern.separator}${currentNumber}`;
   };
 
+  // Adjust cell references in a formula based on row/column offset
+  const adjustFormulaReferences = (formula, rowOffset, colOffset) => {
+    if (typeof formula !== "string" || !formula.startsWith("=")) {
+      return formula;
+    }
+
+    // Helper to convert column letter to index (A=0, B=1, ..., Z=25, AA=26, etc.)
+    const colLetterToIndex = (colStr) => {
+      let idx = 0;
+      for (let i = 0; i < colStr.length; i++) {
+        idx = idx * 26 + (colStr.charCodeAt(i) - 64);
+      }
+      return idx - 1;
+    };
+
+    // Helper to convert column index to letter (0=A, 1=B, ..., 25=Z, 26=AA, etc.)
+    const colIndexToLetter = (idx) => {
+      let result = "";
+      idx = idx + 1; // Convert to 1-based
+      while (idx > 0) {
+        idx--;
+        result = String.fromCharCode(65 + (idx % 26)) + result;
+        idx = Math.floor(idx / 26);
+      }
+      return result;
+    };
+
+    // Adjust a single cell reference (e.g., A1 -> A2 if rowOffset=1)
+    const adjustCellRef = (match, colLetter, rowNum) => {
+      const colIdx = colLetterToIndex(colLetter.toUpperCase());
+      const newColIdx = colIdx + colOffset;
+      const newRow = Number(rowNum) + rowOffset;
+      
+      // Validate bounds
+      if (newColIdx < 0 || newRow < 1) {
+        return match; // Keep original if out of bounds
+      }
+      
+      const newColLetter = colIndexToLetter(newColIdx);
+      return `${newColLetter}${newRow}`;
+    };
+
+    // Adjust a range reference (e.g., A1:B1 -> A2:B2)
+    const adjustRangeRef = (match, col1, row1, col2, row2) => {
+      const col1Idx = colLetterToIndex(col1.toUpperCase());
+      const col2Idx = colLetterToIndex(col2.toUpperCase());
+      const newCol1Idx = col1Idx + colOffset;
+      const newCol2Idx = col2Idx + colOffset;
+      const newRow1 = Number(row1) + rowOffset;
+      const newRow2 = Number(row2) + rowOffset;
+      
+      // Validate bounds
+      if (newCol1Idx < 0 || newCol2Idx < 0 || newRow1 < 1 || newRow2 < 1) {
+        return match; // Keep original if out of bounds
+      }
+      
+      const newCol1Letter = colIndexToLetter(newCol1Idx);
+      const newCol2Letter = colIndexToLetter(newCol2Idx);
+      return `${newCol1Letter}${newRow1}:${newCol2Letter}${newRow2}`;
+    };
+
+    let adjusted = formula;
+    const placeholders = [];
+    let placeholderIndex = 0;
+
+    // First, adjust range references (A1:B5 format) and replace with placeholders
+    // This prevents single ref replacement from matching parts of ranges
+    adjusted = adjusted.replace(/\b([A-Z]+)(\d{1,2})\s*:\s*([A-Z]+)(\d{1,2})\b/gi, (match, col1, row1, col2, row2) => {
+      const adjustedRange = adjustRangeRef(match, col1, row1, col2, row2);
+      const placeholder = `__RANGE_PLACEHOLDER_${placeholderIndex}__`;
+      placeholders.push(adjustedRange);
+      placeholderIndex++;
+      return placeholder;
+    });
+
+    // Then adjust single cell references (A1 format)
+    adjusted = adjusted.replace(/\b([A-Z]+)(\d{1,2})\b/gi, (match, colLetter, rowNum) => {
+      return adjustCellRef(match, colLetter, rowNum);
+    });
+
+    // Finally, restore the range placeholders
+    placeholders.forEach((range, index) => {
+      adjusted = adjusted.replace(`__RANGE_PLACEHOLDER_${index}__`, range);
+    });
+
+    return adjusted;
+  };
+
   const applyFill = (sourceBounds, finalBounds, axis) => {
     // Determine the extension area only (outside original source)
     const ext = { ...finalBounds };
@@ -449,7 +537,16 @@ export default function ExcelGrid() {
           let currentTextNumber = textPattern ? textPattern.numbers[textPattern.numbers.length - 1] : null;
           for (let r = src.endRow + 1; r <= ext.endRow; r++) {
             let value;
-            if (textPattern) {
+            const sourceVal = sourceVals[seqIndex % sourceVals.length] ?? "";
+            const sourceRow = src.startRow + (seqIndex % sourceVals.length);
+            
+            // Check if source value is a formula
+            if (typeof sourceVal === "string" && sourceVal.startsWith("=")) {
+              // Calculate row offset (how many rows down from source)
+              const rowOffset = r - sourceRow;
+              const colOffset = 0; // No column change when filling vertically
+              value = adjustFormulaReferences(sourceVal, rowOffset, colOffset);
+            } else if (textPattern) {
               // Use text pattern
               currentTextNumber = currentTextNumber + textPattern.step;
               value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
@@ -457,7 +554,7 @@ export default function ExcelGrid() {
               value = step !== 0 && sourceVals.length >= 2 ? String(current + step) : String(Number(sourceVals[seqIndex % sourceVals.length]));
               current = Number(value);
             } else {
-              value = String(sourceVals[seqIndex % sourceVals.length] ?? "");
+              value = String(sourceVal);
             }
             updates[`${r}-${columns[c]}`] = value;
             seqIndex++;
@@ -470,7 +567,17 @@ export default function ExcelGrid() {
           let currentTextNumber = textPattern ? textPattern.numbers[0] : null;
           for (let r = src.startRow - 1; r >= ext.startRow; r--) {
             let value;
-            if (textPattern) {
+            const sourceIndex = (sourceVals.length - 1 - (seqIndex % sourceVals.length) + sourceVals.length) % sourceVals.length;
+            const sourceVal = sourceVals[sourceIndex] ?? "";
+            const sourceRow = src.startRow + sourceIndex;
+            
+            // Check if source value is a formula
+            if (typeof sourceVal === "string" && sourceVal.startsWith("=")) {
+              // Calculate row offset (how many rows up from source, negative)
+              const rowOffset = r - sourceRow;
+              const colOffset = 0; // No column change when filling vertically
+              value = adjustFormulaReferences(sourceVal, rowOffset, colOffset);
+            } else if (textPattern) {
               // Use text pattern (going backward)
               currentTextNumber = currentTextNumber - textPattern.step;
               value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
@@ -478,11 +585,9 @@ export default function ExcelGrid() {
               current = current - step;
               value = String(current);
             } else if (allNums && sourceVals.length >= 1) {
-              const pick = sourceVals[(sourceVals.length - 1 - (seqIndex % sourceVals.length) + sourceVals.length) % sourceVals.length];
-              value = String(pick ?? "");
+              value = String(sourceVal);
             } else {
-              const pick = sourceVals[(sourceVals.length - 1 - (seqIndex % sourceVals.length) + sourceVals.length) % sourceVals.length];
-              value = String(pick ?? "");
+              value = String(sourceVal);
             }
             updates[`${r}-${columns[c]}`] = value;
             seqIndex++;
@@ -515,7 +620,16 @@ export default function ExcelGrid() {
           let currentTextNumber = textPattern ? textPattern.numbers[textPattern.numbers.length - 1] : null;
           for (let c = src.endColIdx + 1; c <= ext.endColIdx; c++) {
             let value;
-            if (textPattern) {
+            const sourceVal = sourceVals[seqIndex % sourceVals.length] ?? "";
+            const sourceColIdx = src.startColIdx + (seqIndex % sourceVals.length);
+            
+            // Check if source value is a formula
+            if (typeof sourceVal === "string" && sourceVal.startsWith("=")) {
+              // Calculate column offset (how many columns right from source)
+              const rowOffset = 0; // No row change when filling horizontally
+              const colOffset = c - sourceColIdx;
+              value = adjustFormulaReferences(sourceVal, rowOffset, colOffset);
+            } else if (textPattern) {
               // Use text pattern
               currentTextNumber = currentTextNumber + textPattern.step;
               value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
@@ -523,7 +637,7 @@ export default function ExcelGrid() {
               value = step !== 0 && sourceVals.length >= 2 ? String(current + step) : String(Number(sourceVals[seqIndex % sourceVals.length]));
               current = Number(value);
             } else {
-              value = String(sourceVals[seqIndex % sourceVals.length] ?? "");
+              value = String(sourceVal);
             }
             updates[`${r}-${columns[c]}`] = value;
             seqIndex++;
@@ -535,7 +649,17 @@ export default function ExcelGrid() {
           let currentTextNumber = textPattern ? textPattern.numbers[0] : null;
           for (let c = src.startColIdx - 1; c >= ext.startColIdx; c--) {
             let value;
-            if (textPattern) {
+            const sourceIndex = (sourceVals.length - 1 - (seqIndex % sourceVals.length) + sourceVals.length) % sourceVals.length;
+            const sourceVal = sourceVals[sourceIndex] ?? "";
+            const sourceColIdx = src.startColIdx + sourceIndex;
+            
+            // Check if source value is a formula
+            if (typeof sourceVal === "string" && sourceVal.startsWith("=")) {
+              // Calculate column offset (how many columns left from source, negative)
+              const rowOffset = 0; // No row change when filling horizontally
+              const colOffset = c - sourceColIdx;
+              value = adjustFormulaReferences(sourceVal, rowOffset, colOffset);
+            } else if (textPattern) {
               // Use text pattern (going backward)
               currentTextNumber = currentTextNumber - textPattern.step;
               value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
@@ -543,11 +667,9 @@ export default function ExcelGrid() {
               current = current - step;
               value = String(current);
             } else if (allNums && sourceVals.length >= 1) {
-              const pick = sourceVals[(sourceVals.length - 1 - (seqIndex % sourceVals.length) + sourceVals.length) % sourceVals.length];
-              value = String(pick ?? "");
+              value = String(sourceVal);
             } else {
-              const pick = sourceVals[(sourceVals.length - 1 - (seqIndex % sourceVals.length) + sourceVals.length) % sourceVals.length];
-              value = String(pick ?? "");
+              value = String(sourceVal);
             }
             updates[`${r}-${columns[c]}`] = value;
             seqIndex++;
