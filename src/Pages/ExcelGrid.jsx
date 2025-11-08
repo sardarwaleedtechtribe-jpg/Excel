@@ -361,6 +361,61 @@ export default function ExcelGrid() {
 
   const isNumeric = (v) => v !== "" && !isNaN(Number(v));
 
+  // Detect text patterns like "Item 1", "Item 2" or "tm:1", "tm:2"
+  const detectTextPattern = (values) => {
+    if (values.length < 2) return null;
+    
+    // Try to parse each value as: prefix + separator + number
+    const patterns = [];
+    for (const val of values) {
+      if (typeof val !== "string" || val === "") return null;
+      
+      // Match pattern: text prefix + separator (space, colon, dash, etc.) + number at the end
+      const match = val.match(/^(.+?)([\s:\-])(\d+)$/);
+      if (!match) return null;
+      
+      patterns.push({
+        prefix: match[1],
+        separator: match[2],
+        number: Number(match[3]),
+        full: val
+      });
+    }
+    
+    // Check if all values have the same prefix and separator
+    const firstPrefix = patterns[0].prefix;
+    const firstSeparator = patterns[0].separator;
+    if (!patterns.every(p => p.prefix === firstPrefix && p.separator === firstSeparator)) {
+      return null;
+    }
+    
+    // Check if numbers form a sequence with constant step
+    const numbers = patterns.map(p => p.number);
+    if (numbers.length >= 2) {
+      const diffs = [];
+      for (let i = 1; i < numbers.length; i++) {
+        diffs.push(numbers[i] - numbers[i - 1]);
+      }
+      const same = diffs.every((d) => d === diffs[0]);
+      if (same) {
+        return {
+          prefix: firstPrefix,
+          separator: firstSeparator,
+          numbers: numbers,
+          step: diffs[0],
+          isValid: true
+        };
+      }
+    }
+    
+    return null;
+  };
+
+  // Generate next value in text pattern sequence
+  const generateTextPatternValue = (pattern, currentNumber, step) => {
+    return `${pattern.prefix}${pattern.separator}${currentNumber}`;
+  };
+
   const applyFill = (sourceBounds, finalBounds, axis) => {
     // Determine the extension area only (outside original source)
     const ext = { ...finalBounds };
@@ -375,6 +430,9 @@ export default function ExcelGrid() {
           sourceVals.push(cellContents[`${r}-${columns[c]}`] || "");
         }
 
+        // Check for text pattern first (e.g., "Item 1", "Item 2" or "tm:1", "tm:2")
+        const textPattern = detectTextPattern(sourceVals);
+        
         const allNums = sourceVals.every(isNumeric);
         let step = 0;
         if (allNums && sourceVals.length >= 2) {
@@ -388,9 +446,14 @@ export default function ExcelGrid() {
           // fill downward
           let seqIndex = 0;
           let current = allNums ? Number(sourceVals[sourceVals.length - 1]) : null;
+          let currentTextNumber = textPattern ? textPattern.numbers[textPattern.numbers.length - 1] : null;
           for (let r = src.endRow + 1; r <= ext.endRow; r++) {
             let value;
-            if (allNums && sourceVals.length >= 1) {
+            if (textPattern) {
+              // Use text pattern
+              currentTextNumber = currentTextNumber + textPattern.step;
+              value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
+            } else if (allNums && sourceVals.length >= 1) {
               value = step !== 0 && sourceVals.length >= 2 ? String(current + step) : String(Number(sourceVals[seqIndex % sourceVals.length]));
               current = Number(value);
             } else {
@@ -404,9 +467,14 @@ export default function ExcelGrid() {
           // fill upward
           let seqIndex = 0;
           let current = allNums ? Number(sourceVals[0]) : null;
+          let currentTextNumber = textPattern ? textPattern.numbers[0] : null;
           for (let r = src.startRow - 1; r >= ext.startRow; r--) {
             let value;
-            if (allNums && sourceVals.length >= 2 && step !== 0) {
+            if (textPattern) {
+              // Use text pattern (going backward)
+              currentTextNumber = currentTextNumber - textPattern.step;
+              value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
+            } else if (allNums && sourceVals.length >= 2 && step !== 0) {
               current = current - step;
               value = String(current);
             } else if (allNums && sourceVals.length >= 1) {
@@ -428,6 +496,10 @@ export default function ExcelGrid() {
         for (let c = src.startColIdx; c <= src.endColIdx; c++) {
           sourceVals.push(cellContents[`${r}-${columns[c]}`] || "");
         }
+        
+        // Check for text pattern first (e.g., "Item 1", "Item 2" or "tm:1", "tm:2")
+        const textPattern = detectTextPattern(sourceVals);
+        
         const allNums = sourceVals.every(isNumeric);
         let step = 0;
         if (allNums && sourceVals.length >= 2) {
@@ -440,9 +512,14 @@ export default function ExcelGrid() {
         if (ext.endColIdx > src.endColIdx) {
           let seqIndex = 0;
           let current = allNums ? Number(sourceVals[sourceVals.length - 1]) : null;
-          for (let c = src.startColIdx + 1; c <= ext.endColIdx; c++) {
+          let currentTextNumber = textPattern ? textPattern.numbers[textPattern.numbers.length - 1] : null;
+          for (let c = src.endColIdx + 1; c <= ext.endColIdx; c++) {
             let value;
-            if (allNums && sourceVals.length >= 1) {
+            if (textPattern) {
+              // Use text pattern
+              currentTextNumber = currentTextNumber + textPattern.step;
+              value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
+            } else if (allNums && sourceVals.length >= 1) {
               value = step !== 0 && sourceVals.length >= 2 ? String(current + step) : String(Number(sourceVals[seqIndex % sourceVals.length]));
               current = Number(value);
             } else {
@@ -455,9 +532,14 @@ export default function ExcelGrid() {
         if (ext.startColIdx < src.startColIdx) {
           let seqIndex = 0;
           let current = allNums ? Number(sourceVals[0]) : null;
+          let currentTextNumber = textPattern ? textPattern.numbers[0] : null;
           for (let c = src.startColIdx - 1; c >= ext.startColIdx; c--) {
             let value;
-            if (allNums && sourceVals.length >= 2 && step !== 0) {
+            if (textPattern) {
+              // Use text pattern (going backward)
+              currentTextNumber = currentTextNumber - textPattern.step;
+              value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
+            } else if (allNums && sourceVals.length >= 2 && step !== 0) {
               current = current - step;
               value = String(current);
             } else if (allNums && sourceVals.length >= 1) {
