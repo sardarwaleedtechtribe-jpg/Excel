@@ -1,5 +1,20 @@
-import React, { useEffect, useRef, useState } from "react";
+import React from "react";
+import FillHandleButton from "./FillHandleButton";
+import FillHandlePreview from "./FillHandlePreview";
+import { useFillHandleDrag } from "./hooks/useFillHandleDrag";
 
+/**
+ * FillHandle - Main component that displays a fill handle button and preview
+ * for Excel-like cell filling functionality.
+ * 
+ * @param {Object} overlayRect - The position and size of the overlay { left, top, width, height }
+ * @param {Object} selectionBounds - The selected cell/range bounds { startRow, endRow, startColIdx, endColIdx }
+ * @param {Function} clientToCell - Converts client coordinates to cell coordinates
+ * @param {Function} getUnionRangeFromDrag - Calculates the union range from drag start to end
+ * @param {Function} getRectForBounds - Converts bounds to pixel rectangle coordinates
+ * @param {Function} onApplyFill - Callback when fill is applied (srcBounds, finalBounds)
+ * @param {Function} onPreviewChange - Optional callback when preview bounds change
+ */
 export default function FillHandle({
   overlayRect, // { left, top, width, height }
   selectionBounds, // { startRow, endRow, startColIdx, endColIdx }
@@ -9,84 +24,31 @@ export default function FillHandle({
   onApplyFill, // (srcBounds, finalBounds) => void
   onPreviewChange, // optional: (previewBounds|null) => void
 }) {
-  // use state for preview so we re-render when it changes
-  const dragRef = useRef({ active: false, startRange: null });
-  const [previewBounds, setPreviewBounds] = useState(null);
+  // Use custom hook to handle all drag logic
+  const { previewBounds, startDrag } = useFillHandleDrag({
+    clientToCell,
+    getUnionRangeFromDrag,
+    onApplyFill,
+    onPreviewChange,
+    selectionBounds,
+  });
 
-  useEffect(() => {
-    const onMouseMove = (e) => {
-      if (!dragRef.current.active || !dragRef.current.startRange) return;
-      const endCell = clientToCell(e.clientX, e.clientY);
-      if (!endCell) return;
-      const union = getUnionRangeFromDrag(dragRef.current.startRange, endCell);
-      setPreviewBounds(union);
-      if (onPreviewChange) onPreviewChange(union);
-    };
-    const onMouseUp = () => {
-      if (!dragRef.current.active || !dragRef.current.startRange) {
-        dragRef.current = { active: false, startRange: null };
-        setPreviewBounds(null);
-        if (onPreviewChange) onPreviewChange(null);
-        return;
-      }
-      const src = dragRef.current.startRange;
-      const final = previewBounds;
-      dragRef.current = { active: false, startRange: null };
-      setPreviewBounds(null);
-      if (onPreviewChange) onPreviewChange(null);
-      if (!final) return;
-      if (
-        final.startRow !== src.startRow ||
-        final.endRow !== src.endRow ||
-        final.startColIdx !== src.startColIdx ||
-        final.endColIdx !== src.endColIdx
-      ) {
-        onApplyFill(src, final);
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [clientToCell, getUnionRangeFromDrag, onApplyFill, previewBounds]);
-
+  // Convert preview bounds to pixel coordinates for rendering
   const previewRect = previewBounds ? getRectForBounds(previewBounds) : null;
+
+  // Handle mouse down on the drag handle button
+  const handleMouseDown = (e) => {
+    e.stopPropagation();
+    startDrag();
+  };
 
   return (
     <>
-      <div
-        className="absolute z-20 bg-green-600 border border-white"
-        style={{
-          left: `${overlayRect.left + overlayRect.width - 5}px`,
-          top: `${overlayRect.top + overlayRect.height - 5}px`,
-          width: '8px',
-          height: '8px',
-          cursor: 'crosshair',
-        }}
-        onMouseDown={(e) => {
-          e.stopPropagation();
-          if (!selectionBounds) return;
-          dragRef.current = {
-            active: true,
-            startRange: { ...selectionBounds },
-          };
-          setPreviewBounds(null);
-        }}
-      />
+      {/* The green drag handle button at the bottom-right of the selection */}
+      <FillHandleButton overlayRect={overlayRect} onMouseDown={handleMouseDown} />
 
-      {previewRect && (
-        <div
-          className="pointer-events-none absolute border-2 border-blue-500 box-border z-10"
-          style={{
-            left: previewRect.left,
-            top: previewRect.top,
-            width: previewRect.width,
-            height: previewRect.height,
-          }}
-        />
-      )}
+      {/* The blue preview rectangle showing where cells will be filled */}
+      <FillHandlePreview previewRect={previewRect} />
     </>
   );
 }

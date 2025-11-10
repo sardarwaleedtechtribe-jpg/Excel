@@ -1,131 +1,80 @@
+/**
+ * Main formula utilities module that composes all formula-related functions
+ */
+
+import { getCellValueByKey as getCellValueByKeyFn } from "./cellValue.js";
+import { expandRange as expandRangeFn } from "./rangeExpansion.js";
+import { evaluateFunctions as evaluateFunctionsFn } from "./functionEvaluation.js";
+import { evaluateFormula as evaluateFormulaFn } from "./formulaEvaluation.js";
+import { getDisplayForCell as getDisplayForCellFn } from "./cellDisplay.js";
+
+/**
+ * Creates formula utilities with all dependencies properly bound
+ * @param {string[]} columns - Array of valid column letters
+ * @param {number} rowsLength - Total number of rows
+ * @param {Function} getRawByKey - Function to get raw cell content by key
+ * @returns {Object} - Object containing evaluateFormula and getDisplayForCell functions
+ */
 export function createFormulaUtils(columns, rowsLength, getRawByKey) {
-  const clampNumber = (n) => (Number.isFinite(n) ? n : 0);
+  // Create closures for functions that need circular dependencies
+  // We'll define these using let so they can reference each other
+  let evaluateFormulaBound;
+  let getCellValueByKeyBound;
+  let expandRangeBound;
+  let evaluateFunctionsBound;
 
-  const colInRange = (c) => columns.indexOf(c) >= 0;
-
-  const getCellValueByKey = (key, visiting) => {
-    const raw = getRawByKey(key) ?? "";
-    if (typeof raw !== "string") return raw;
-    if (!raw.startsWith("=")) return isNaN(Number(raw)) ? raw : Number(raw);
-    const coords = key.split("-");
-    const row = Number(coords[0]);
-    const col = coords[1];
-    return evaluateFormula(raw.slice(1), row, col, visiting);
+  // Create getCellValueByKey with bound dependencies
+  getCellValueByKeyBound = (key, visiting) => {
+    return getCellValueByKeyFn(
+      key,
+      visiting,
+      getRawByKey,
+      (formulaExpr, row, col, vis) => evaluateFormulaBound(formulaExpr, row, col, vis)
+    );
   };
 
-  const expandRange = (startRef, endRef, visiting) => {
-    const refToRowCol = (ref) => ({ row: Number(ref.slice(1)), col: ref[0] });
-    const a = refToRowCol(startRef);
-    const b = refToRowCol(endRef);
-    const startRow = Math.min(a.row, b.row);
-    const endRow = Math.max(a.row, b.row);
-    const startColIdx = Math.min(columns.indexOf(a.col), columns.indexOf(b.col));
-    const endColIdx = Math.max(columns.indexOf(a.col), columns.indexOf(b.col));
-    const vals = [];
-    for (let r = startRow; r <= endRow; r++) {
-      for (let c = startColIdx; c <= endColIdx; c++) {
-        const k = `${r}-${columns[c]}`;
-        const v = getCellValueByKey(k, visiting);
-        const num = typeof v === "number" ? v : Number(v);
-        vals.push(isNaN(num) ? 0 : num);
-      }
-    }
-    return vals;
+  // Create expandRange with bound dependencies
+  expandRangeBound = (startRef, endRef, visiting) => {
+    return expandRangeFn(
+      startRef,
+      endRef,
+      visiting,
+      columns,
+      getCellValueByKeyBound
+    );
   };
 
-  const evaluateFunctions = (expr, visiting) => {
-    let prev;
-    // Accept AVG and AVERAGE; case-insensitive
-    const fnRegex = /(SUM|AVG|AVERAGE|MIN|MAX)\s*\(([^()]*)\)/gi;
-    do {
-      prev = expr;
-      expr = expr.replace(fnRegex, (_, fnName, inner) => {
-        const args = inner
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-        const values = [];
-        for (const token of args) {
-          const rangeMatch = /^([A-R]\d{1,2})\s*:\s*([A-R]\d{1,2})$/i.exec(token);
-          if (rangeMatch) {
-            values.push(
-              ...expandRange(
-                rangeMatch[1].toUpperCase(),
-                rangeMatch[2].toUpperCase(),
-                visiting
-              )
-            );
-            continue;
-          }
-          const refMatch = /^([A-R])(\d{1,2})$/i.exec(token);
-          if (refMatch) {
-            const k = `${Number(refMatch[2])}-${refMatch[1].toUpperCase()}`;
-            const v = getCellValueByKey(k, visiting);
-            const num = typeof v === "number" ? v : Number(v);
-            values.push(isNaN(num) ? 0 : num);
-            continue;
-          }
-          const num = Number(token);
-          values.push(isNaN(num) ? 0 : num);
-        }
-        if (values.length === 0) return "0";
-        const sum = values.reduce((a, b) => a + b, 0);
-        switch (fnName.toUpperCase()) {
-          case "SUM":
-            return String(clampNumber(sum));
-          case "AVG":
-          case "AVERAGE":
-            return String(clampNumber(sum / values.length));
-          case "MIN":
-            return String(clampNumber(Math.min(...values)));
-          case "MAX":
-            return String(clampNumber(Math.max(...values)));
-          default:
-            return "0";
-        }
-      });
-    } while (expr !== prev);
-    return expr;
+  // Create evaluateFunctions with bound dependencies
+  evaluateFunctionsBound = (expr, visiting) => {
+    return evaluateFunctionsFn(
+      expr,
+      visiting,
+      expandRangeBound,
+      getCellValueByKeyBound
+    );
   };
 
-  const evaluateFormula = (formulaExpr, currentRow, currentCol, visiting = new Set()) => {
-    const currentKey = `${currentRow}-${currentCol}`;
-    if (visiting.has(currentKey)) return "#CYCLE";
-    visiting.add(currentKey);
-    try {
-      let expr = evaluateFunctions(formulaExpr, visiting);
-      expr = expr.replace(/\b([A-R])(\d{1,2})\b/gi, (m, c, r) => {
-        const col = c.toUpperCase();
-        const row = Number(r);
-        if (!colInRange(col) || row < 1 || row > rowsLength) return "0";
-        const key = `${row}-${col}`;
-        const v = getCellValueByKey(key, new Set(visiting));
-        const num = typeof v === "number" ? v : Number(v);
-        return String(isNaN(num) ? 0 : num);
-      });
-      if (!/^[0-9+\-*/().\s]+$/.test(expr)) return "#ERR";
-      // eslint-disable-next-line no-new-func
-      const result = Function(`"use strict"; return (${expr});`)();
-      if (typeof result === "number") {
-        if (!isFinite(result)) return "#ERR";
-        return result;
-      }
-      return String(result);
-    } catch (e) {
-      return "#ERR";
-    } finally {
-      visiting.delete(currentKey);
-    }
+  // Create evaluateFormula with bound dependencies
+  evaluateFormulaBound = (formulaExpr, currentRow, currentCol, visiting = new Set()) => {
+    return evaluateFormulaFn(
+      formulaExpr,
+      currentRow,
+      currentCol,
+      visiting,
+      columns,
+      rowsLength,
+      evaluateFunctionsBound,
+      getCellValueByKeyBound
+    );
   };
 
-  const getDisplayForCell = (row, col) => {
-    const key = `${row}-${col}`;
-    const raw = getRawByKey(key) ?? "";
-    if (typeof raw !== "string") return raw;
-    if (!raw.startsWith("=")) return raw;
-    const evaluated = evaluateFormula(raw.slice(1), row, col);
-    return typeof evaluated === "number" ? String(evaluated) : String(evaluated);
+  // Create getDisplayForCell with bound dependencies
+  const getDisplayForCellBound = (row, col) => {
+    return getDisplayForCellFn(row, col, getRawByKey, evaluateFormulaBound);
   };
 
-  return { evaluateFormula, getDisplayForCell };
+  return {
+    evaluateFormula: evaluateFormulaBound,
+    getDisplayForCell: getDisplayForCellBound,
+  };
 }

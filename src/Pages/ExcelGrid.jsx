@@ -5,7 +5,7 @@ import FillHandle from "../Components/FillHandle";
 const columns = Array.from({ length: 26 }, (_, i) =>
   String.fromCharCode(65 + i)
 );
-const rows = Array.from({ length: 27 }, (_, i) => i + 1);
+const rows = Array.from({ length: 26 }, (_, i) => i + 1);
 
 export default function ExcelGrid() {
   const [selectedCell, setSelectedCell] = useState({ row: 1, col: "A" });
@@ -14,18 +14,12 @@ export default function ExcelGrid() {
   const [editingKey, setEditingKey] = useState(null);
   const [editMode, setEditMode] = useState("select");
   const [isDoubleClickEdit, setIsDoubleClickEdit] = useState(false); // Track if edit mode was entered via double-click
-  const [colWidths, setColWidths] = useState(
-    columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {})
-  );
-  const [rowHeights, setRowHeights] = useState(
-    rows.reduce((acc, row) => ({ ...acc, [row]: 25 }), {})
-  );
+  const [colWidths, setColWidths] = useState( columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {}) );
+  const [rowHeights, setRowHeights] = useState( rows.reduce((acc, row) => ({ ...acc, [row]: 25 }), {}) );
   const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
-
-  // Tracks Excel-like function argument picking within parentheses
+  // Tracks Excel-like function argument picking within parentheses 
   // { key: 'row-col', stage: 'start'|'end', paramStart: number, startCell?: { row, col } }
   const [formulaPick, setFormulaPick] = useState(null);
-
   // Formula reference bounding box for ranges; and explicit single-cell refs for non-range formulas
   const [formulaRefBounds, setFormulaRefBounds] = useState(null);
   const [formulaSingleRefs, setFormulaSingleRefs] = useState([]); // array of bounds for A1, B3 ...
@@ -35,6 +29,13 @@ export default function ExcelGrid() {
   const selectingRef = useRef(false);
   const dragAnchorRef = useRef(null);
   const containerRef = useRef(null);
+  const lastClickRef = useRef({ time: 0, cell: null });
+  const editingStateRef = useRef({ editingKey: null, editMode: 'select' });
+  
+  // Keep editing state ref in sync
+  useEffect(() => {
+    editingStateRef.current = { editingKey, editMode };
+  }, [editingKey, editMode]);
 
   // Autofocus selected cell
   useEffect(() => {
@@ -361,18 +362,44 @@ export default function ExcelGrid() {
 
   const isNumeric = (v) => v !== "" && !isNaN(Number(v));
 
-  // Detect text patterns like "Item 1", "Item 2" or "tm:1", "tm:2"
+  // DETECT TEXT PATTERN  like "Item 1", "Item 2" or "tm:1", "tm:2" or "i1", "i2"
   const detectTextPattern = (values) => {
     if (values.length < 2) return null;
     
-    // Try to parse each value as: prefix + separator + number
+    // Try to parse each value as: prefix + (optional separator) + number
     const patterns = [];
     for (const val of values) {
       if (typeof val !== "string" || val === "") return null;
       
-      // Match pattern: text prefix + separator (space, colon, dash, etc.) + number at the end
-      const match = val.match(/^(.+?)([\s:\-])(\d+)$/);
-      if (!match) return null;
+      // Skip if it's a pure number (handled by numeric fill logic)
+      if (/^\d+$/.test(val.trim())) return null;
+      
+      // Match pattern: text prefix + separator (space, colon, dash) + number at the end
+      // First try with separator: "i 1", "item-1", "tm:1"
+      let match = val.match(/^(.+?)([\s:\-])(\d+)$/);
+      
+      // If no separator, try direct text+number: "i1", "item1"
+      if (!match) {
+        // Match text prefix (at least one non-digit character) followed by digits at the end
+        match = val.match(/^(.+?)(\d+)$/);
+        if (match) {
+          const prefix = match[1];
+          const numberPart = match[2];
+          
+          // Ensure the prefix has at least one non-digit character
+          // This prevents matching pure numbers like "123" (which would match as prefix="12", number="3")
+          if (/\D/.test(prefix)) {
+            patterns.push({
+              prefix: prefix,
+              separator: "", // No separator
+              number: Number(numberPart),
+              full: val
+            });
+            continue;
+          }
+        }
+        return null;
+      }
       
       patterns.push({
         prefix: match[1],
@@ -808,6 +835,7 @@ export default function ExcelGrid() {
                   (selectionRange.start.row !== selectionRange.end.row ||
                     selectionRange.start.col !== selectionRange.end.col));
 
+              const isEditingThisCell = editMode === 'edit' && editingKey === `${row}-${col}`;
               return (
                 <div
                   key={`${row}-${col}`}
@@ -816,16 +844,55 @@ export default function ExcelGrid() {
                     ${isInRange ? (isSelected && isMultiSelection ? "bg-green-200" : "bg-green-100") : ""}
                     ${showActiveBorder ? 'border-2 border-gray-900' : 'border border-gray-300'}
                     -mx-px -mt-px
-                    ${isSelected ? 'z-10' : 'z-0'}`}
+                    ${isSelected ? 'z-10' : 'z-0'}
+                    ${isEditingThisCell ? 'cursor-text' : 'cursor-cell'}`}
                   style={{
                     width: colWidths[col],
                     height: rowHeights[row],
                   }}
                   onMouseDown={(e) => {
-                    // If we're editing another cell that contains a formula (starts with '='),
-                    // optionally insert the clicked cell reference into that formula at the caret instead
+                    // If we're already editing this cell, allow normal text selection behavior
                     const clickedKey = `${row}-${col}`;
                     const currentEditingKey = editingKey;
+                    if (currentEditingKey === clickedKey && editMode === 'edit') {
+                      // Allow default behavior for text selection within the editing cell
+                      return;
+                    }
+                    
+                    // Check if this might be a double-click (within 300ms of last click on same cell)
+                    const now = Date.now();
+                    const isPotentialDoubleClick = 
+                      lastClickRef.current.cell === clickedKey && 
+                      (now - lastClickRef.current.time) < 300;
+                    
+                    if (isPotentialDoubleClick) {
+                      // Delay the state change to allow double-click to fire first
+                      setTimeout(() => {
+                        // Only proceed if double-click didn't fire (edit mode not set)
+                        const currentState = editingStateRef.current;
+                        if (!(currentState.editingKey === clickedKey && currentState.editMode === 'edit')) {
+                          selectingRef.current = true;
+                          setEditMode("select");
+                          setEditingKey(null);
+                          setIsDoubleClickEdit(false);
+                          const anchor = e.shiftKey ? selectedCell : { row, col };
+                          dragAnchorRef.current = anchor;
+                          setSelectedCell(anchor);
+                          if (e.shiftKey) {
+                            setSelectionRange({ start: anchor, end: { row, col } });
+                          } else {
+                            setSelectionRange(null);
+                          }
+                        }
+                      }, 300);
+                      lastClickRef.current = { time: now, cell: clickedKey };
+                      return;
+                    }
+                    
+                    lastClickRef.current = { time: now, cell: clickedKey };
+                    
+                    // If we're editing another cell that contains a formula (starts with '='),
+                    // optionally insert the clicked cell reference into that formula at the caret instead
                     if (currentEditingKey && currentEditingKey !== clickedKey) {
                       const rawEditing = cellContents[currentEditingKey] ?? "";
                       if (typeof rawEditing === "string" && rawEditing.startsWith("=")) {
@@ -949,6 +1016,7 @@ export default function ExcelGrid() {
                     }
 
                     // Start selection (normal behavior when not inserting into formula)
+                    // Only if not a potential double-click (handled above)
                     selectingRef.current = true;
                     setEditMode("select");
                     setEditingKey(null);
@@ -963,20 +1031,20 @@ export default function ExcelGrid() {
                       setSelectionRange(null);
                     }
                   }}
-                  onDoubleClick={() => {
+                  onDoubleClick={(e) => {
                     const keyHere = `${row}-${col}`;
                     setSelectedCell({ row, col });
                     setEditingKey(keyHere);
                     setEditMode("edit");
                     setIsDoubleClickEdit(true); // Mark as double-click edit mode
+                    
+                    // Don't prevent default - let browser handle text selection naturally
+                    // The input's onMouseDown will stop propagation to prevent cell handler interference
                     setTimeout(() => {
                       const el = inputRefs.current[keyHere];
                       if (el) {
                         el.focus();
-                        try {
-                          const len = el.value ? el.value.length : 0;
-                          el.setSelectionRange(len, len);
-                        } catch (e) {}
+                        // Browser will handle cursor positioning and word selection naturally
                       }
                     }, 0);
                   }}
@@ -992,7 +1060,9 @@ export default function ExcelGrid() {
                   <input
                     ref={(el) => (inputRefs.current[`${row}-${col}`] = el)}
                     type="text"
-                    className="w-full h-full bg-transparent items-end text-left cursor-cell focus:outline-none px-1 "
+                    className={`w-full h-full bg-transparent items-end text-left focus:outline-none px-1 ${
+                      editMode === 'edit' && editingKey === `${row}-${col}` ? 'cursor-text' : 'cursor-cell'
+                    }`}
                     value={
                       editingKey === `${row}-${col}`
                         ? (cellContents[`${row}-${col}`] || "")
@@ -1006,6 +1076,12 @@ export default function ExcelGrid() {
                         [`${row}-${col}`]: e.target.value,
                       }))
                     }
+                    onMouseDown={(e) => {
+                      // When clicking inside the input while editing, allow normal text selection
+                      if (editMode === 'edit' && editingKey === `${row}-${col}`) {
+                        e.stopPropagation(); // Prevent cell's onMouseDown from interfering
+                      }
+                    }}
                     onFocus={() => setSelectedCell({ row, col })}
                     onBlur={() => { 
                       if (editingKey === `${row}-${col}`) {
@@ -1206,4 +1282,3 @@ export default function ExcelGrid() {
     </div>
   );
 }
-// WORKING (with marching ants border for selection & formula references)
