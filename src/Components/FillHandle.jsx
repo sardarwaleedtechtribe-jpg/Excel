@@ -15,6 +15,7 @@ import { useFillHandleDrag } from "./hooks/useFillHandleDrag";
  * @param {Function} onApplyFill - Callback when fill is applied (srcBounds, finalBounds)
  * @param {Function} onPreviewChange - Optional callback when preview bounds change
  */
+
 export default function FillHandle({
   overlayRect, // { left, top, width, height }
   selectionBounds, // { startRow, endRow, startColIdx, endColIdx }

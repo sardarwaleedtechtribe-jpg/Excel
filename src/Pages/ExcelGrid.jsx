@@ -33,9 +33,8 @@ export default function ExcelGrid() {
   const editingStateRef = useRef({ editingKey: null, editMode: 'select' });
   
   // Keep editing state ref in sync
-  useEffect(() => {
-    editingStateRef.current = { editingKey, editMode };
-  }, [editingKey, editMode]);
+  useEffect(() => {editingStateRef.current = { editingKey, editMode };
+                  }, [editingKey, editMode]);
 
   // Autofocus selected cell
   useEffect(() => {
@@ -162,6 +161,7 @@ export default function ExcelGrid() {
     };
   }, []);
 
+  // When selecting multiple cells, users can drag in any direction — e.g., top-left → bottom-right or bottom-right → top-left.
   const getRangeBounds = (range) => {
     if (!range) return null;
     const startRow = Math.min(range.start.row, range.end.row);
@@ -179,6 +179,7 @@ export default function ExcelGrid() {
 
   const selectionBounds = getRangeBounds(selectionRange);
 
+  // Checks whether a specific cell (by row + column)is inside the current selection range.
   const isInSelection = (row, col) => {
     if (!selectionRange) return false;
     const b = getRangeBounds(selectionRange);
@@ -245,6 +246,7 @@ export default function ExcelGrid() {
     };
   }, [selectedCell]);
 
+  // useMemo ensures this is only recalculated if the cell or column/row sizes change
   const selectedCellOverlay = useMemo(() => {
     if (!selectedCell) return null;
     const left = getLeftForCol(selectedCell.col);
@@ -262,6 +264,8 @@ export default function ExcelGrid() {
     [cellContents]
   );
 
+  // Converts mouse coordinates (clientX, clientY) to the cell under the cursor
+  // This is essential for clicking and drag-selecting cells.
   const clientToCell = (clientX, clientY) => {
     const container = containerRef.current;
     if (!container) return null;
@@ -300,6 +304,8 @@ export default function ExcelGrid() {
     return { row: rowNum, col: columns[Math.max(0, Math.min(columns.length - 1, colIdx))] };
   };
 
+  // Updates a selection range when dragging with the mouse.
+  // Returns a new range object including which axis is being extended.
   const getUnionRangeFromDrag = (startBounds, endCell) => {
     const endColIdx = columns.indexOf(endCell.col);
     const extendDown = endCell.row > startBounds.endRow;
@@ -336,6 +342,8 @@ export default function ExcelGrid() {
     }
   };
 
+  // Converts cell range bounds to a pixel rectangle:
+  // Used for drawing selection overlays or fill handles.
   const getRectForBounds = (bounds) => {
     const startCol = columns[bounds.startColIdx];
     const left = getLeftForCol(startCol);
@@ -347,6 +355,7 @@ export default function ExcelGrid() {
     return { left, top, width, height };
   };
 
+  //Returns 2D array of cell values for the selected range.
   const getValuesFromRange = (bounds) => {
     const values = [];
     for (let r = bounds.startRow; r <= bounds.endRow; r++) {
@@ -360,6 +369,7 @@ export default function ExcelGrid() {
     return values;
   };
 
+  // Checks if a value can be treated as a number.
   const isNumeric = (v) => v !== "" && !isNaN(Number(v));
 
   // DETECT TEXT PATTERN  like "Item 1", "Item 2" or "tm:1", "tm:2" or "i1", "i2"
@@ -531,6 +541,7 @@ export default function ExcelGrid() {
     return adjusted;
   };
 
+  // Implements Excel-style fill handle behavior
   const applyFill = (sourceBounds, finalBounds, axis) => {
     // Determine the extension area only (outside original source)
     const ext = { ...finalBounds };
@@ -710,7 +721,26 @@ export default function ExcelGrid() {
     }
   };
 
-  // Marquee (marching-ants) SVG rectangle. Uses a CSS animation on stroke-dashoffset.
+  // Render simple HTML markup for a formula string so that cell references (e.g., A1, D5)
+  // are highlighted in blue while typing. This is used as an underlay behind the input.
+  const getFormulaMarkup = (raw) => {
+    if (typeof raw !== "string") return "";
+    const escapeHtml = (s) =>
+      s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    const escaped = escapeHtml(raw);
+    // Colorize single-cell references (1-2 capital letters followed by digits, e.g., A1, D5, AA10)
+    const refRegex = /\b([A-Z]{1,2}[1-9][0-9]*)\b/g;
+    const withRefsColored = escaped.replace(
+      refRegex,
+      '<span style="color:#3b82f6">$1</span>'
+    );
+    return withRefsColored;
+  };
+
+  // Marquee (marching-ants-border) SVG rectangle. Uses a CSS animation on stroke-dashoffset.
   const MarqueeBorder = ({ left, top, width, height, color = "black", strokeWidth = 2, dashArray = "6 4", zIndex = 60 }) => {
     if (width == null || height == null) return null;
     // Padding so stroke is fully visible (stroke is centered on rect path)
@@ -839,25 +869,18 @@ export default function ExcelGrid() {
               return (
                 <div
                   key={`${row}-${col}`}
-                  className={`relative 
-                    hover:bg-green-100 
+                  className={`relative hover:bg-green-100 
                     ${isInRange ? (isSelected && isMultiSelection ? "bg-green-200" : "bg-green-100") : ""}
-                    ${showActiveBorder ? 'border-2 border-gray-900' : 'border border-gray-300'}
-                    -mx-px -mt-px
+                    ${showActiveBorder ? 'border-2 border-gray-900' : 'border-1 border-gray-300'} -mx-0 -mt-0
                     ${isSelected ? 'z-10' : 'z-0'}
                     ${isEditingThisCell ? 'cursor-text' : 'cursor-cell'}`}
-                  style={{
-                    width: colWidths[col],
-                    height: rowHeights[row],
-                  }}
+                  style={{width: colWidths[col], height: rowHeights[row],}}
                   onMouseDown={(e) => {
                     // If we're already editing this cell, allow normal text selection behavior
                     const clickedKey = `${row}-${col}`;
                     const currentEditingKey = editingKey;
-                    if (currentEditingKey === clickedKey && editMode === 'edit') {
-                      // Allow default behavior for text selection within the editing cell
-                      return;
-                    }
+                    // Allow default behavior for text selection within the editing cell 
+                    if (currentEditingKey === clickedKey && editMode === 'edit') { return;}
                     
                     // Check if this might be a double-click (within 300ms of last click on same cell)
                     const now = Date.now();
@@ -1057,6 +1080,12 @@ export default function ExcelGrid() {
                     selectingRef.current = false;
                   }}
                 >
+                  {/* Formula highlighting underlay while editing formulas */}
+                  {isEditingThisCell && typeof (cellContents[`${row}-${col}`] || "") === "string" && (cellContents[`${row}-${col}`] || "").startsWith("=") && (
+                    <div className="pointer-events-none absolute inset-0 px-1 overflow-hidden"
+                      style={{ lineHeight: `${rowHeights[row]}px`, whiteSpace: 'nowrap' }}
+                      dangerouslySetInnerHTML={{ __html: getFormulaMarkup(cellContents[`${row}-${col}`] || "") }}/>
+                  )}
                   <input
                     ref={(el) => (inputRefs.current[`${row}-${col}`] = el)}
                     type="text"
@@ -1068,7 +1097,15 @@ export default function ExcelGrid() {
                         ? (cellContents[`${row}-${col}`] || "")
                         : getDisplayForCell(row, col)
                     }
-                    style={{ lineHeight: `${rowHeights[row]}px`, caretColor: (editMode === 'edit' && editingKey === `${row}-${col}`) ? undefined : 'transparent' }}
+                    style={{
+                      lineHeight: `${rowHeights[row]}px`,
+                      // Hide text color while editing a formula so the colored underlay is visible, keep caret visible
+                      color:
+                        (isEditingThisCell && typeof (cellContents[`${row}-${col}`] || "") === "string" && (cellContents[`${row}-${col}`] || "").startsWith("="))
+                          ? 'transparent'
+                          : undefined,
+                      caretColor: (editMode === 'edit' && editingKey === `${row}-${col}`) ? undefined : 'transparent'
+                    }}
                     readOnly={!(editMode === 'edit' && editingKey === `${row}-${col}`)}
                     onChange={(e) =>
                       setCellContents((prev) => ({
@@ -1224,8 +1261,8 @@ export default function ExcelGrid() {
 
         {/* If editing a formula and there are range references, show a union marching-ants border around them */}
         {formulaRefBounds && (
-          (() => {
-            const rect = getRectForBounds(formulaRefBounds);
+          (() => 
+          { const rect = getRectForBounds(formulaRefBounds);
             return (
               <MarqueeBorder
                 left={rect.left}
@@ -1235,13 +1272,11 @@ export default function ExcelGrid() {
                 color="#3b82f6" /* blue */
                 strokeWidth={2}
                 dashArray="8 4"
-                zIndex={80}
-              />
-            );
-          })()
-        )}
+                zIndex={80} /> );
+          })())}
 
         {/* If editing a formula and there are explicit single refs (e.g., =A1+A4), draw discrete borders per cell */}
+        {/* this draws separate blue animated borders for EACH A1+A4+B6... etc.*/}
         {formulaSingleRefs && formulaSingleRefs.length > 0 && formulaSingleRefs.map((b, i) => {
           const rect = getRectForBounds(b);
           if (!rect) return null;
@@ -1255,12 +1290,10 @@ export default function ExcelGrid() {
               color="#3b82f6"
               strokeWidth={2}
               dashArray="8 4"
-              zIndex={80}
-            />
-          );
+              zIndex={80} /> );
         })}
 
-        {/* Fill handle component - also show for single selected cell */}
+        {/* Fill handle square button - also show for single selected cell */}
         {!isEditingFormula && (selectionOverlay || selectedCellOverlay) && (
           <FillHandle
             overlayRect={selectionOverlay || selectedCellOverlay}

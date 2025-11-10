@@ -1,9 +1,11 @@
-import React from "react";
 
 /**
  * FillHandleButton - The drag handle button that appears at the bottom-right
  * of the selected cell/range. Users click and drag this to fill cells.
- */
+*/
+
+import React from "react";
+
 export default function FillHandleButton({ overlayRect, onMouseDown }) {
   // Validate overlayRect to prevent runtime errors
   if (!overlayRect || typeof overlayRect.left !== 'number' || typeof overlayRect.width !== 'number') {
