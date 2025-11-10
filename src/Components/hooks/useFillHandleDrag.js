@@ -44,6 +44,23 @@ export function useFillHandleDrag({
     };
     previewBoundsRef.current = null;
     setPreviewBounds(null);
+    // Force crosshair cursor on all elements during drag
+    document.documentElement.classList.add('fill-handle-dragging');
+    document.body.style.cursor = 'crosshair';
+    document.body.style.userSelect = 'none'; // Prevent text selection during drag
+    
+    // Inject style to override all cursor styles during drag
+    const styleId = 'fill-handle-cursor-override';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        .fill-handle-dragging * {
+          cursor: crosshair !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
   }, [selectionBounds]);
 
   useEffect(() => {
@@ -62,6 +79,11 @@ export function useFillHandleDrag({
     };
 
     const onMouseUp = () => {
+      // Restore cursor and user selection
+      document.documentElement.classList.remove('fill-handle-dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      
       if (!dragRef.current.active || !dragRef.current.startRange) {
         dragRef.current = { active: false, startRange: null };
         previewBoundsRef.current = null;
@@ -99,6 +121,12 @@ export function useFillHandleDrag({
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      // Cleanup: restore cursor if component unmounts during drag
+      if (dragRef.current.active) {
+        document.documentElement.classList.remove('fill-handle-dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
     };
   }, []); // Empty dependency array - functions are accessed via refs
 
