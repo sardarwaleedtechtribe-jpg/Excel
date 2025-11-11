@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createFormulaUtils } from "../utils/formulas";
 import FillHandle from "../Components/FillHandle";
+import MoveHandle from "../Components/MoveHandle";
 
 const columns = Array.from({ length: 26 }, (_, i) =>
   String.fromCharCode(65 + i)
@@ -9,13 +10,13 @@ const rows = Array.from({ length: 26 }, (_, i) => i + 1);
 
 export default function ExcelGrid() {
   const [selectedCell, setSelectedCell] = useState({ row: 1, col: "A" });
-  const [selectionRange, setSelectionRange] = useState(null); // { start: {row,col}, end: {row,col} }
-  const [cellContents, setCellContents] = useState({});
-  const [editingKey, setEditingKey] = useState(null);
-  const [editMode, setEditMode] = useState("select");
+  const [selectionRange, setSelectionRange] = useState(null); // active cell 
+  const [cellContents, setCellContents] = useState({});//marquee selection start/end
+  const [editingKey, setEditingKey] = useState(null);//content and formula entry
+  const [editMode, setEditMode] = useState("select");//col row w/h
   const [isDoubleClickEdit, setIsDoubleClickEdit] = useState(false); // Track if edit mode was entered via double-click
   const [colWidths, setColWidths] = useState( columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {}) );
-  const [rowHeights, setRowHeights] = useState( rows.reduce((acc, row) => ({ ...acc, [row]: 25 }), {}) );
+  const [rowHeights, setRowHeights] = useState( rows.reduce((acc, row)  => ({ ...acc, [row]: 25 }), {}) );
   const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
   // Tracks Excel-like function argument picking within parentheses 
   // { key: 'row-col', stage: 'start'|'end', paramStart: number, startCell?: { row, col } }
@@ -430,6 +431,11 @@ export default function ExcelGrid() {
     return { left, top, width, height };
   };
 
+  // Converts column letter to index (A=0, B=1, etc.)
+  const colToIndex = (col) => {
+    return columns.indexOf(col);
+  };
+
   //Returns 2D array of cell values for the selected range.
   const getValuesFromRange = (bounds) => {
     const values = [];
@@ -794,6 +800,70 @@ export default function ExcelGrid() {
     if (Object.keys(updates).length > 0) {
       setCellContents((prev) => ({ ...prev, ...updates }));
     }
+  };
+
+  // Moves cell contents from source bounds to destination bounds (Excel-style move)
+  const moveCells = (srcBounds, destBounds) => {
+    // Don't move if source and destination overlap or are the same
+    const srcOverlapsDest = 
+      !(srcBounds.endRow < destBounds.startRow || 
+        srcBounds.startRow > destBounds.endRow ||
+        srcBounds.endColIdx < destBounds.startColIdx ||
+        srcBounds.startColIdx > destBounds.endColIdx);
+    
+    if (srcOverlapsDest) {
+      // If overlapping, don't move
+      return;
+    }
+
+    const updates = {};
+    const toClear = [];
+
+    // Copy all cell contents from source to destination
+    const rowCount = srcBounds.endRow - srcBounds.startRow + 1;
+    const colCount = srcBounds.endColIdx - srcBounds.startColIdx + 1;
+
+    for (let r = 0; r < rowCount; r++) {
+      for (let c = 0; c < colCount; c++) {
+        const srcRow = srcBounds.startRow + r;
+        const srcColIdx = srcBounds.startColIdx + c;
+        const destRow = destBounds.startRow + r;
+        const destColIdx = destBounds.startColIdx + c;
+
+        // Validate destination bounds
+        if (destRow < 1 || destRow > rows.length || destColIdx < 0 || destColIdx >= columns.length) {
+          continue;
+        }
+
+        const srcKey = `${srcRow}-${columns[srcColIdx]}`;
+        const destKey = `${destRow}-${columns[destColIdx]}`;
+        
+        // Copy the value
+        const value = cellContents[srcKey] ?? "";
+        updates[destKey] = value;
+        
+        // Mark source cell for clearing
+        toClear.push(srcKey);
+      }
+    }
+
+    // Apply updates (copy to destination)
+    if (Object.keys(updates).length > 0) {
+      setCellContents((prev) => {
+        const newContents = { ...prev, ...updates };
+        // Clear source cells
+        toClear.forEach(key => {
+          newContents[key] = "";
+        });
+        return newContents;
+      });
+    }
+
+    // Update selection to the new location
+    const newStart = { row: destBounds.startRow, col: columns[destBounds.startColIdx] };
+    const newEnd = { row: destBounds.endRow, col: columns[destBounds.endColIdx] };
+    setSelectionRange({ start: newStart, end: newEnd });
+    setSelectedCell(newEnd);
   };
 
   // Render simple HTML markup for a formula string so that cell references (e.g., A1, D5)
@@ -1534,6 +1604,19 @@ export default function ExcelGrid() {
               setSelectionRange({ start, end });
               setSelectedCell(end);
             }}
+            onPreviewChange={(bounds) => setFillPreviewBounds(bounds)}
+          />
+        )}
+
+        {/* Move handle - shows move cursor on border and allows dragging to move cells */}
+        {!isEditingFormula && (selectionOverlay || selectedCellOverlay) && (
+          <MoveHandle
+            overlayRect={selectionOverlay || selectedCellOverlay}
+            selectionBounds={selectionBounds || selectedCellBounds}
+            clientToCell={clientToCell}
+            getRectForBounds={getRectForBounds}
+            colToIndex={colToIndex}
+            onMoveCells={moveCells}
             onPreviewChange={(bounds) => setFillPreviewBounds(bounds)}
           />
         )}
