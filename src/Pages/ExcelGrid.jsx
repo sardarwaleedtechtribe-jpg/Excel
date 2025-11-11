@@ -1223,7 +1223,9 @@ export default function ExcelGrid() {
                         if (e.key === '(') {
                           // Next char position after insert becomes paramStart; use caret+1 prediction
                           const nextParamStart = caret + 1;
-                          setFormulaPick({ key: keyHere, stage: 'start', paramStart: nextParamStart, startCell: undefined });
+                          // Initialize keyboard picking cursor and show single-cell marching-ants highlight
+                          setFormulaPick({ key: keyHere, stage: 'start', paramStart: nextParamStart, startCell: undefined, cursor: { row, col } });
+                          setSelectionRange({ start: { row, col }, end: { row, col } });
                           return;
                         }
 
@@ -1239,6 +1241,86 @@ export default function ExcelGrid() {
                           return;
                         }
                       } catch (_) {}
+
+                      // While picking function args, use arrow keys to move the picking cursor and update segment/highlight
+                      if (inEditHere && formulaPick && formulaPick.key === keyHere && ["ArrowDown","ArrowUp","ArrowLeft","ArrowRight"].includes(e.key)) {
+                        e.preventDefault();
+
+                        const currentCursor = formulaPick.cursor || { row, col };
+                        let nextRow = currentCursor.row;
+                        let nextColIdx = columns.indexOf(currentCursor.col);
+
+                        if (e.key === "ArrowDown") nextRow = Math.min(currentCursor.row + 1, rows.length);
+                        if (e.key === "ArrowUp")   nextRow = Math.max(currentCursor.row - 1, 1);
+                        if (e.key === "ArrowRight") nextColIdx = Math.min(nextColIdx + 1, columns.length - 1);
+                        if (e.key === "ArrowLeft")  nextColIdx = Math.max(nextColIdx - 1, 0);
+
+                        const nextCol = columns[nextColIdx];
+                        const newCursor = { row: nextRow, col: nextCol };
+                        const editEl = inputRefs.current[keyHere];
+                        const rawEditing = cellContents[keyHere] ?? "";
+
+                        // Determine current parameter substring boundaries
+                        const paramStart = Math.min(formulaPick.paramStart ?? 0, rawEditing.length);
+                        let paramEnd = rawEditing.length;
+                        for (let i = paramStart; i < rawEditing.length; i++) {
+                          const ch = rawEditing[i];
+                          if (ch === ')' || ch === ',') { paramEnd = i; break; }
+                        }
+                        const segment = rawEditing.slice(paramStart, paramEnd);
+
+                        const refHere = `${newCursor.col}${newCursor.row}`;
+                        let newSegment;
+                        if (formulaPick.stage === 'start') {
+                          // Maintain anything after ':' if user already typed it
+                          const colonIdx = segment.indexOf(':');
+                          newSegment = colonIdx >= 0 ? refHere + segment.slice(colonIdx) : refHere;
+                        } else {
+                          // stage === 'end': ensure a range is formed with startCell
+                          const start = formulaPick.startCell || newCursor;
+                          const startRef = `${start.col}${start.row}`;
+                          const colonIdx = segment.indexOf(':');
+                          newSegment = (colonIdx === -1) ? `${startRef}:${refHere}` : segment.slice(0, colonIdx + 1) + refHere;
+                        }
+
+                        const newRaw = rawEditing.slice(0, paramStart) + newSegment + rawEditing.slice(paramEnd);
+                        setCellContents((prev) => ({ ...prev, [keyHere]: newRaw }));
+
+                        // Update marching ants selection
+                        if (formulaPick.stage === 'start') {
+                          setSelectionRange({ start: newCursor, end: newCursor });
+                          setFormulaPick(prev => prev && prev.key === keyHere ? { ...prev, cursor: newCursor, startCell: newCursor } : prev);
+                        } else {
+                          const start = formulaPick.startCell || newCursor;
+                          const startColIdx = columns.indexOf(start.col);
+                          const endColIdx = nextColIdx;
+                          const b = {
+                            startRow: Math.min(start.row, nextRow),
+                            endRow: Math.max(start.row, nextRow),
+                            startColIdx: Math.min(startColIdx, endColIdx),
+                            endColIdx: Math.max(startColIdx, endColIdx),
+                          };
+                          setSelectionRange({ start: { row: b.startRow, col: columns[b.startColIdx] }, end: { row: b.endRow, col: columns[b.endColIdx] } });
+                          setFormulaPick(prev => prev && prev.key === keyHere ? { ...prev, cursor: newCursor } : prev);
+                        }
+
+                        // Keep focus and caret at end of param
+                        setTimeout(() => {
+                          const el = inputRefs.current[keyHere];
+                          if (el) {
+                            try {
+                              const caretPos = paramStart + newSegment.length;
+                              el.focus();
+                              el.setSelectionRange(caretPos, caretPos);
+                            } catch {}
+                          }
+                        }, 0);
+
+                        // Maintain selectedCell as the editing cell
+                        const [editRowStr, editCol] = keyHere.split("-");
+                        setSelectedCell({ row: Number(editRowStr), col: editCol });
+                        return;
+                      }
                     }}
                   />
                 </div>
