@@ -1100,7 +1100,7 @@ export default function ExcelGrid() {
                           return undefined;
                         };
 
-                        const triggers = new Set(["=", "+", "-", "*", "/", "^", ":", ",", "("]);
+                        const triggers = new Set(["=", "+", "-", "*", "/", "^", ":", ",", "(", "<", ">", "!"]);
                         const prevChar = getPrevNonWhitespaceChar(rawEditing, selStart);
                         const shouldInsertRef =
                           (formulaPick && formulaPick.key === currentEditingKey) ||
