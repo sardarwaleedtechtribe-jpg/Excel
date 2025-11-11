@@ -15,7 +15,7 @@ export function useFillHandleDrag({
   onApplyFill,
   onPreviewChange,
   selectionBounds,
-}) {
+}) { 
   const dragRef = useRef({ active: false, startRange: null });
   const previewBoundsRef = useRef(null); // Use ref to avoid stale closures
   

@@ -2,7 +2,7 @@
  * Functions for getting display values for cells
  */
 
-/**
+/** 
  * Gets the display value for a cell (evaluates formulas if needed)
  * @param {number} row - Row number
  * @param {string} col - Column letter

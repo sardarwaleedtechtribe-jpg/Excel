@@ -2,7 +2,7 @@
  * Functions for retrieving and evaluating cell values
  */
 
-/**
+/** 
  * Gets the value of a cell by its key, handling formulas recursively
  * @param {string} key - Cell key in format "row-col"
  * @param {Set} visiting - Set of cells currently being visited (for cycle detection)

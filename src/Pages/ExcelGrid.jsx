@@ -306,7 +306,7 @@ export default function ExcelGrid() {
     const key = `${row}-${col}`;
     const isEditingThis = editMode === 'edit' && editingKey === key;
     if (isEditingThis) return null; // never overflow while actively editing
-
+ 
     // Only text-like values overflow. Treat pure numbers as non-overflowing.
     const display = String(getDisplayForCell(row, col) ?? "");
     if (!display) return null;

@@ -19,7 +19,7 @@ import { colInRange } from "./cellUtils.js";
 export function evaluateFormula(
   formulaExpr,
   currentRow,
-  currentCol,
+  currentCol, 
   visiting = new Set(),
   columns,
   rowsLength,

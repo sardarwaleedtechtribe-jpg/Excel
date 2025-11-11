@@ -38,7 +38,7 @@ export function createFormulaUtils(columns, rowsLength, getRawByKey) {
     return expandRangeFn(
       startRef,
       endRef,
-      visiting,
+      visiting, 
       columns,
       getCellValueByKeyBound
     );

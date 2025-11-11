@@ -22,7 +22,7 @@ export default function FillHandle({
   clientToCell,
   getUnionRangeFromDrag,
   getRectForBounds,
-  onApplyFill, // (srcBounds, finalBounds) => void
+  onApplyFill, // (srcBounds, finalBounds) => void 
   onPreviewChange, // optional: (previewBounds|null) => void
 }) {
   // Use custom hook to handle all drag logic
