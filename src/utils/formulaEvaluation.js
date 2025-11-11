@@ -31,6 +31,12 @@ export function evaluateFormula(
   visiting.add(currentKey);
   try {
     let expr = evaluateFunctions(formulaExpr, visiting);
+    // If functions evaluation produced a quoted string literal (e.g., from IF), return it as plain text
+    const trimmed = String(expr).trim();
+    const stringLiteralMatch = /^"([^"]*)"$/s.exec(trimmed);
+    if (stringLiteralMatch) {
+      return stringLiteralMatch[1];
+    }
     expr = expr.replace(/\b([A-R])(\d{1,2})\b/gi, (m, c, r) => {
       const col = c.toUpperCase();
       const row = Number(r);

@@ -1057,9 +1057,28 @@ export default function ExcelGrid() {
 
                             const segment = rawEditing.slice(paramStart, paramEnd);
                             const colonIdx = segment.indexOf(':');
+                            const hasExprOperators = /[><=!+\-*/^]/.test(segment);
 
                             let newSegment;
                             let newCaretOffsetFromStart;
+                            if (hasExprOperators) {
+                              // If the current segment contains expression operators (e.g., A1>), do a simple caret insertion instead of replacing the whole segment
+                              const newRaw = rawEditing.slice(0, selStart) + ref + rawEditing.slice(selEnd);
+                              setCellContents((prev) => ({ ...prev, [currentEditingKey]: newRaw }));
+                              setTimeout(() => {
+                                const el = inputRefs.current[currentEditingKey];
+                                if (el) {
+                                  el.focus();
+                                  try {
+                                    el.setSelectionRange(selStart + ref.length, selStart + ref.length);
+                                  } catch (err) {}
+                                }
+                              }, 0);
+                              // keep selectedCell on the cell being edited
+                              const [editRowStr, editCol] = currentEditingKey.split("-");
+                              setSelectedCell({ row: Number(editRowStr), col: editCol });
+                              return;
+                            }
                             if (formulaPick.stage === 'start') {
                               // Replace entire segment up to ':'/end with the single ref
                               newSegment = ref + (colonIdx >= 0 ? segment.slice(colonIdx) : segment.slice(segment.length));
@@ -1218,7 +1237,12 @@ export default function ExcelGrid() {
                         (isEditingThisCell && typeof (cellContents[`${row}-${col}`] || "") === "string" && (cellContents[`${row}-${col}`] || "").startsWith("="))
                           ? 'transparent'
                           : undefined,
-                      caretColor: (editMode === 'edit' && editingKey === `${row}-${col}`) ? undefined : 'transparent'
+                      // Ensure caret remains visible even when text color is transparent during formula editing
+                      caretColor: (editMode === 'edit' && editingKey === `${row}-${col}`)
+                        ? ((isEditingThisCell && typeof (cellContents[`${row}-${col}`] || "") === "string" && (cellContents[`${row}-${col}`] || "").startsWith("="))
+                            ? '#000'
+                            : undefined)
+                        : 'transparent'
                     }}
                     readOnly={!(editMode === 'edit' && editingKey === `${row}-${col}`)}
                     onChange={(e) => {

@@ -14,8 +14,8 @@ import { clampNumber } from "./cellUtils.js";
  */
 export function evaluateFunctions(expr, visiting, expandRange, getCellValueByKey) {
   let prev;
-  // Accept AVG and AVERAGE; add PRODUCT, COUNT, IF; case-insensitive
-  const fnRegex = /(SUM|AVG|MIN|MAX|PRODUCT|COUNT|IF)\s*\(([^()]*)\)/gi;
+  // Accept AVG and AVERAGE; add PRODUCT and IF; case-insensitive
+  const fnRegex = /(SUM|AVG|MIN|MAX|PRODUCT|IF)\s*\(([^()]*)\)/gi;
   do {
     prev = expr;
     expr = expr.replace(fnRegex, (_, fnName, inner) => {
@@ -139,10 +139,6 @@ export function evaluateFunctions(expr, visiting, expandRange, getCellValueByKey
         case "PRODUCT": {
           const product = values.reduce((a, b) => a * b, 1);
           return String(clampNumber(product));
-        }
-        case "COUNT": {
-          const count = values.reduce((acc, v) => (typeof v === "number" && !isNaN(v) ? acc + 1 : acc), 0);
-          return String(count);
         }
         default:
           return "0";
