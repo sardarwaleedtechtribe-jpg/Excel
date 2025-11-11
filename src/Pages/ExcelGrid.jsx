@@ -25,6 +25,7 @@ export default function ExcelGrid() {
   const [formulaSingleRefs, setFormulaSingleRefs] = useState([]); // array of bounds for A1, B3 ...
 
   const inputRefs = useRef({});
+  const measureCanvasRef = useRef(null);
   const resizingRef = useRef(null);
   const selectingRef = useRef(false);
   const dragAnchorRef = useRef(null);
@@ -35,6 +36,41 @@ export default function ExcelGrid() {
   // Keep editing state ref in sync
   useEffect(() => {editingStateRef.current = { editingKey, editMode };
                   }, [editingKey, editMode]);
+
+  // Measure text width using the input's computed font
+  const getTextPixelWidth = (text, element) => {
+    try {
+      if (!measureCanvasRef.current) {
+        measureCanvasRef.current = document.createElement('canvas');
+      }
+      const ctx = measureCanvasRef.current.getContext('2d');
+      let font = '16px sans-serif';
+      if (element) {
+        const cs = window.getComputedStyle(element);
+        // Normalize font string similar to canvas expectations
+        font = `${cs.fontStyle} ${cs.fontVariant} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      }
+      ctx.font = font;
+      const metrics = ctx.measureText(String(text || ''));
+      // Add a tiny buffer for caret/rendering jitter
+      return Math.ceil(metrics.width);
+    } catch {
+      return String(text || '').length * 8; // fallback approximation
+    }
+  };
+
+  const ensureColumnFitsValue = (col, value, element) => {
+    // Tailwind px-1 = 0.25rem ≈ 4px per side; add small breathing room
+    const horizontalPaddingAndBuffer = 12; // 4 + 4 padding + ~4 buffer
+    const desired = Math.max(40, getTextPixelWidth(value, element) + horizontalPaddingAndBuffer);
+    setColWidths((prev) => {
+      const current = prev[col] ?? 80;
+      if (desired > current) {
+        return { ...prev, [col]: desired };
+      }
+      return prev;
+    });
+  };
 
   // Autofocus selected cell
   useEffect(() => {
@@ -263,6 +299,45 @@ export default function ExcelGrid() {
     () => createFormulaUtils(columns, rows.length, getRawByKey),
     [cellContents]
   );
+
+  // Determine if the text in a cell should visually overflow into the next cells,
+  // and how far it can extend based on consecutive empty neighbor cells.
+  const getOverflowSpanForCell = (row, col) => {
+    const key = `${row}-${col}`;
+    const isEditingThis = editMode === 'edit' && editingKey === key;
+    if (isEditingThis) return null; // never overflow while actively editing
+
+    // Only text-like values overflow. Treat pure numbers as non-overflowing.
+    const display = String(getDisplayForCell(row, col) ?? "");
+    if (!display) return null;
+    if (/^\s*\d+(\.\d+)?\s*$/.test(display)) return null; // numeric -> do not overflow like Excel
+
+    const el = inputRefs.current[key];
+    const textWidth = getTextPixelWidth(display, el);
+    const currentWidth = colWidths[col] ?? 80;
+    if (textWidth <= currentWidth) return null; // fits within the cell
+
+    // If next cells are empty, we can visually extend into them.
+    let totalAvailable = currentWidth;
+    let spanCols = 1;
+    let colIdx = columns.indexOf(col);
+    for (let i = colIdx + 1; i < columns.length; i++) {
+      const nextCol = columns[i];
+      const nextKey = `${row}-${nextCol}`;
+      const nextRaw = cellContents[nextKey] ?? "";
+      // Stop if neighbor has content
+      if (String(nextRaw).length > 0) break;
+      totalAvailable += (colWidths[nextCol] ?? 80);
+      spanCols++;
+      if (totalAvailable >= textWidth) break; // no need to continue if we have enough room
+    }
+
+    if (spanCols === 1) {
+      // Next cell is filled or no additional width available -> Excel would clip (no overflow shown)
+      return null;
+    }
+    return { spanCols, totalAvailable, textWidth };
+  };
 
   // Converts mouse coordinates (clientX, clientY) to the cell under the cursor
   // This is essential for clicking and drag-selecting cells.
@@ -866,6 +941,22 @@ export default function ExcelGrid() {
                     selectionRange.start.col !== selectionRange.end.col));
 
               const isEditingThisCell = editMode === 'edit' && editingKey === `${row}-${col}`;
+              // Overflow logic
+              const overflowInfo = getOverflowSpanForCell(row, col);
+              const colIndex = columns.indexOf(col);
+              const leftNeighbor = colIndex > 0 ? columns[colIndex - 1] : null;
+              const leftNeighborKey = leftNeighbor ? `${row}-${leftNeighbor}` : null;
+              const leftNeighborOverflows =
+                leftNeighborKey ? getOverflowSpanForCell(row, leftNeighbor) : null;
+              const receivesOverflowFromLeft =
+                !!leftNeighborOverflows &&
+                (cellContents[`${row}-${col}`] ?? "") === "" &&
+                // Ensure the left neighbor has enough span to cover into this column
+                (columns.indexOf(leftNeighbor) + (leftNeighborOverflows?.spanCols || 1) - 1) >= colIndex;
+              const leftIdx = leftNeighbor ? columns.indexOf(leftNeighbor) : -1;
+              const leftSpanEndIdx = leftIdx >= 0 ? leftIdx + (leftNeighborOverflows?.spanCols || 1) - 1 : -1;
+              const receiverHideRightBorder = receivesOverflowFromLeft && colIndex < leftSpanEndIdx;
+
               return (
                 <div
                   key={`${row}-${col}`}
@@ -874,7 +965,13 @@ export default function ExcelGrid() {
                     ${showActiveBorder ? 'border-2 border-gray-900' : 'border-1 border-gray-300'} -mx-0 -mt-0
                     ${isSelected ? 'z-10' : 'z-0'}
                     ${isEditingThisCell ? 'cursor-text' : 'cursor-cell'}`}
-                  style={{width: colWidths[col], height: rowHeights[row],}}
+                  style={{
+                    width: colWidths[col],
+                    height: rowHeights[row],
+                    // Hide border between overflowing cell and next empty cell to mimic Excel
+                    borderRightColor: (overflowInfo && !showActiveBorder) ? 'transparent' : (receiverHideRightBorder && !showActiveBorder ? 'transparent' : undefined),
+                    borderLeftColor: (receivesOverflowFromLeft && !showActiveBorder) ? 'transparent' : undefined
+                  }}
                   onMouseDown={(e) => {
                     // If we're already editing this cell, allow normal text selection behavior
                     const clickedKey = `${row}-${col}`;
@@ -1080,6 +1177,22 @@ export default function ExcelGrid() {
                     selectingRef.current = false;
                   }}
                 >
+                  {/* Text overflow overlay for non-editing, text cells */}
+                  {!isEditingThisCell && overflowInfo && (
+                    <div
+                      className="pointer-events-none absolute top-0 left-0 px-1 whitespace-nowrap"
+                      style={{
+                        height: rowHeights[row],
+                        lineHeight: `${rowHeights[row]}px`,
+                        // Extend overlay to cover into consecutive empty cells
+                        width: overflowInfo.totalAvailable,
+                        zIndex: 0, // keep it beneath cell borders and selection outlines
+                        overflow: 'hidden' // prevent drawing beyond allowed span
+                      }}
+                    >
+                      {String(getDisplayForCell(row, col) ?? "")}
+                    </div>
+                  )}
                   {/* Formula highlighting underlay while editing formulas */}
                   {isEditingThisCell && typeof (cellContents[`${row}-${col}`] || "") === "string" && (cellContents[`${row}-${col}`] || "").startsWith("=") && (
                     <div className="pointer-events-none absolute inset-0 px-1 overflow-hidden"
@@ -1099,20 +1212,25 @@ export default function ExcelGrid() {
                     }
                     style={{
                       lineHeight: `${rowHeights[row]}px`,
+                      // If we render an overflow overlay, hide input text to avoid duplicate rendering underneath
+                      color: overflowInfo ? 'transparent' :
                       // Hide text color while editing a formula so the colored underlay is visible, keep caret visible
-                      color:
                         (isEditingThisCell && typeof (cellContents[`${row}-${col}`] || "") === "string" && (cellContents[`${row}-${col}`] || "").startsWith("="))
                           ? 'transparent'
                           : undefined,
                       caretColor: (editMode === 'edit' && editingKey === `${row}-${col}`) ? undefined : 'transparent'
                     }}
                     readOnly={!(editMode === 'edit' && editingKey === `${row}-${col}`)}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const newVal = e.target.value;
                       setCellContents((prev) => ({
                         ...prev,
-                        [`${row}-${col}`]: e.target.value,
-                      }))
-                    }
+                        [`${row}-${col}`]: newVal,
+                      }));
+                      // Auto-expand column while typing
+                      const el = inputRefs.current[`${row}-${col}`];
+                      ensureColumnFitsValue(col, newVal, el);
+                    }}
                     onMouseDown={(e) => {
                       // When clicking inside the input while editing, allow normal text selection
                       if (editMode === 'edit' && editingKey === `${row}-${col}`) {
@@ -1137,6 +1255,8 @@ export default function ExcelGrid() {
                           e.preventDefault();
                           const nextVal = isErase ? '' : e.key;
                           setCellContents((prev) => ({ ...prev, [keyHere]: nextVal }));
+                          // Ensure the column expands immediately on first typed char or erase-to-empty
+                          ensureColumnFitsValue(col, nextVal, inputRefs.current[keyHere]);
                           setSelectionRange(null);
                           setEditingKey(keyHere);
                           setEditMode('edit');
