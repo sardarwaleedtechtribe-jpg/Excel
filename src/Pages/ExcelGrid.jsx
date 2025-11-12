@@ -11,12 +11,45 @@ const rows = Array.from({ length: 26 }, (_, i) => i + 1);
 export default function ExcelGrid() {
   const [selectedCell, setSelectedCell] = useState({ row: 1, col: "A" });
   const [selectionRange, setSelectionRange] = useState(null); // active cell 
-  const [cellContents, setCellContents] = useState({});//marquee selection start/end
   const [editingKey, setEditingKey] = useState(null);//content and formula entry
   const [editMode, setEditMode] = useState("select");//col row w/h
   const [isDoubleClickEdit, setIsDoubleClickEdit] = useState(false); // Track if edit mode was entered via double-click
-  const [colWidths, setColWidths] = useState( columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {}) );
-  const [rowHeights, setRowHeights] = useState( rows.reduce((acc, row)  => ({ ...acc, [row]: 25 }), {}) );
+  
+  const STORAGE_KEY = "excel-grid-state-v1";
+  // Initialize from localStorage synchronously to avoid overwrite races on first save
+  const [cellContents, setCellContents] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return {};
+      const saved = JSON.parse(raw);
+      return (saved && typeof saved.cellContents === "object") ? saved.cellContents : {};
+    } catch { return {}; }
+  });
+  const [colWidths, setColWidths] = useState(() => {
+    const defaults = columns.reduce((acc, col) => ({ ...acc, [col]: 80 }), {});
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaults;
+      const saved = JSON.parse(raw);
+      if (saved && typeof saved.colWidths === "object") {
+        return { ...defaults, ...saved.colWidths };
+      }
+      return defaults;
+    } catch { return defaults; }
+  });
+  const [rowHeights, setRowHeights] = useState(() => {
+    const defaults = rows.reduce((acc, row)  => ({ ...acc, [row]: 25 }), {});
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaults;
+      const saved = JSON.parse(raw);
+      if (saved && typeof saved.rowHeights === "object") {
+        return { ...defaults, ...saved.rowHeights };
+      }
+      return defaults;
+    } catch { return defaults; }
+  });
+  
   const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
   // Tracks Excel-like function argument picking within parentheses 
   // { key: 'row-col', stage: 'start'|'end', paramStart: number, startCell?: { row, col } }
@@ -37,6 +70,14 @@ export default function ExcelGrid() {
   // Keep editing state ref in sync
   useEffect(() => {editingStateRef.current = { editingKey, editMode };
                   }, [editingKey, editMode]);
+
+  // Persist key parts of state to localStorage
+  useEffect(() => {
+    try {
+      const toSave = {cellContents,colWidths,rowHeights,};
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    } catch {}
+  }, [cellContents, colWidths, rowHeights]);
 
   // Measure text width using the input's computed font
   const getTextPixelWidth = (text, element) => {
