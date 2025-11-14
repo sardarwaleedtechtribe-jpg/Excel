@@ -14,6 +14,22 @@ export default function ExcelGrid() {
   const [editingKey, setEditingKey] = useState(null);//content and formula entry
   const [editMode, setEditMode] = useState("select");//col row w/h
   const [isDoubleClickEdit, setIsDoubleClickEdit] = useState(false); // Track if edit mode was entered via double-click
+  const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
+  // Tracks Excel-like function argument picking within parentheses 
+  // { key: 'row-col', stage: 'start'|'end', paramStart: number, startCell?: { row, col } }
+  const [formulaPick, setFormulaPick] = useState(null);
+  // Formula reference bounding box for ranges; and explicit single-cell refs for non-range formulas
+  const [formulaRefBounds, setFormulaRefBounds] = useState(null);
+  const [formulaSingleRefs, setFormulaSingleRefs] = useState([]); // array of bounds for A1, B3 ...
+
+  const inputRefs = useRef({});
+  const measureCanvasRef = useRef(null);
+  const resizingRef = useRef(null);
+  const selectingRef = useRef(false);
+  const dragAnchorRef = useRef(null);
+  const containerRef = useRef(null);
+  const lastClickRef = useRef({ time: 0, cell: null });
+  const editingStateRef = useRef({ editingKey: null, editMode: 'select' });
   
   const STORAGE_KEY = "excel-grid-state-v1";
   // Initialize from localStorage synchronously to avoid overwrite races on first save
@@ -49,24 +65,7 @@ export default function ExcelGrid() {
       return defaults;
     } catch { return defaults; }
   });
-  
-  const [fillPreviewBounds, setFillPreviewBounds] = useState(null);
-  // Tracks Excel-like function argument picking within parentheses 
-  // { key: 'row-col', stage: 'start'|'end', paramStart: number, startCell?: { row, col } }
-  const [formulaPick, setFormulaPick] = useState(null);
-  // Formula reference bounding box for ranges; and explicit single-cell refs for non-range formulas
-  const [formulaRefBounds, setFormulaRefBounds] = useState(null);
-  const [formulaSingleRefs, setFormulaSingleRefs] = useState([]); // array of bounds for A1, B3 ...
-
-  const inputRefs = useRef({});
-  const measureCanvasRef = useRef(null);
-  const resizingRef = useRef(null);
-  const selectingRef = useRef(false);
-  const dragAnchorRef = useRef(null);
-  const containerRef = useRef(null);
-  const lastClickRef = useRef({ time: 0, cell: null });
-  const editingStateRef = useRef({ editingKey: null, editMode: 'select' });
-  
+    
   // Keep editing state ref in sync
   useEffect(() => {editingStateRef.current = { editingKey, editMode };
                   }, [editingKey, editMode]);
@@ -287,16 +286,33 @@ export default function ExcelGrid() {
     return top;
   };
 
+  // Calculates the position and size of the selection highlight overlay
+  // This creates a blue box that shows which cells are currently selected
   const getSelectionOverlayStyle = () => {
+    // If there's no selection, don't show any overlay
     if (!selectionBounds) return null;
+    
+    // Get the start and end positions of the selected area
     const { startRow, endRow, startColIdx, endColIdx } = selectionBounds;
+    
+    // Get the column letter/ID at the start position (e.g., "A", "B", "C")
     const startCol = columns[startColIdx];
+    
+    // Calculate where the selection box should start (left edge)
     const left = getLeftForCol(startCol);
+    
+    // Calculate where the selection box should start (top edge)
     const top = getTopForRow(startRow);
+    
+    // Calculate the total width by adding up all column widths in the selection
     let width = 0;
     for (let i = startColIdx; i <= endColIdx; i++) width += colWidths[columns[i]];
+    
+    // Calculate the total height by adding up all row heights in the selection
     let height = 0;
     for (let r = startRow; r <= endRow; r++) height += rowHeights[r];
+    
+    // Return the style object that positions and sizes the selection overlay
     return { left, top, width, height };
   };
 
@@ -386,6 +402,7 @@ export default function ExcelGrid() {
   const clientToCell = (clientX, clientY) => {
     const container = containerRef.current;
     if (!container) return null;
+    //{getBoundingClientRect}gets the container’s position and size 
     const rect = container.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -478,21 +495,24 @@ export default function ExcelGrid() {
   };
 
   //Returns 2D array of cell values for the selected range.
-  const getValuesFromRange = (bounds) => {
-    const values = [];
-    for (let r = bounds.startRow; r <= bounds.endRow; r++) {
-      const rowVals = [];
-      for (let c = bounds.startColIdx; c <= bounds.endColIdx; c++) {
-        const key = `${r}-${columns[c]}`;
-        rowVals.push(cellContents[key] || "");
-      }
-      values.push(rowVals);
-    }
-    return values;
-  };
+  // const getValuesFromRange = (bounds) => {
+  //   const values = [];
+  //   for (let r = bounds.startRow; r <= bounds.endRow; r++) {
+  //     const rowVals = [];
+  //     for (let c = bounds.startColIdx; c <= bounds.endColIdx; c++) {
+  //       const key = `${r}-${columns[c]}`;
+  //       rowVals.push(cellContents[key] || "");
+  //     }
+  //     values.push(rowVals);
+  //   }
+  //   return values;
+  // };
 
   // Checks if a value can be treated as a number.
+  
   const isNumeric = (v) => v !== "" && !isNaN(Number(v));
+  // Checks if a value can be treated as a number.
+
 
   // DETECT TEXT PATTERN  like "Item 1", "Item 2" or "tm:1", "tm:2" or "i1", "i2"
   const detectTextPattern = (values) => {
@@ -500,7 +520,7 @@ export default function ExcelGrid() {
     
     // Try to parse each value as: prefix + (optional separator) + number
     const patterns = [];
-    for (const val of values) {
+    for (const val of values) {// Skip if value is not a string or is empty 
       if (typeof val !== "string" || val === "") return null;
       
       // Skip if it's a pure number (handled by numeric fill logic)
@@ -541,7 +561,7 @@ export default function ExcelGrid() {
       });
     }
     
-    // Check if all values have the same prefix and separator
+    // Check if  values have the same prefix and separator
     const firstPrefix = patterns[0].prefix;
     const firstSeparator = patterns[0].separator;
     if (!patterns.every(p => p.prefix === firstPrefix && p.separator === firstSeparator)) {
@@ -581,7 +601,7 @@ export default function ExcelGrid() {
       return formula;
     }
 
-    // Helper to convert column letter to index (A=0, B=1, ..., Z=25, AA=26, etc.)
+    // Helper to convert column letter to index (A=0, B=1,..,Z=25,AA=26,..)
     const colLetterToIndex = (colStr) => {
       let idx = 0;
       for (let i = 0; i < colStr.length; i++) {
@@ -681,6 +701,7 @@ export default function ExcelGrid() {
         // Check for text pattern first (e.g., "Item 1", "Item 2" or "tm:1", "tm:2")
         const textPattern = detectTextPattern(sourceVals);
         
+        // Checks if all values are numeric (for numeric sequence fill)
         const allNums = sourceVals.every(isNumeric);
         let step = 0;
         if (allNums && sourceVals.length >= 2) {
@@ -700,22 +721,23 @@ export default function ExcelGrid() {
             const sourceVal = sourceVals[seqIndex % sourceVals.length] ?? "";
             const sourceRow = src.startRow + (seqIndex % sourceVals.length);
             
-            // Check if source value is a formula
-            if (typeof sourceVal === "string" && sourceVal.startsWith("=")) {
-              // Calculate row offset (how many rows down from source)
-              const rowOffset = r - sourceRow;
+            // Check if source value is a FORMULA [=A1+B1]
+            if (typeof sourceVal === "string" && sourceVal.startsWith("=")) 
+              {// Calculate row offset (how many rows down from source)
+              const rowOffset = r - sourceRow;// How many rows down from source
               const colOffset = 0; // No column change when filling vertically
               value = adjustFormulaReferences(sourceVal, rowOffset, colOffset);
-            } else if (textPattern) {
-              // Use text pattern
+            } //text PATTERN is detected
+            else if (textPattern) { 
+              // Use TEXT +  NUMBER pattern ("item3" → "item4)
               currentTextNumber = currentTextNumber + textPattern.step;
               value = generateTextPatternValue(textPattern, currentTextNumber, textPattern.step);
-            } else if (allNums && sourceVals.length >= 1) {
+            }//all numbers are detected NUMERIC SEQUENCE
+            else if (allNums && sourceVals.length >= 1) {
               value = step !== 0 && sourceVals.length >= 2 ? String(current + step) : String(Number(sourceVals[seqIndex % sourceVals.length]));
               current = Number(value);
-            } else {
-              value = String(sourceVal);
-            }
+            } 
+            else {value = String(sourceVal);}
             updates[`${r}-${columns[c]}`] = value;
             seqIndex++;
           }
@@ -754,7 +776,8 @@ export default function ExcelGrid() {
           }
         }
       }
-    } else if (axis === "horizontal") {
+    } 
+    else if (axis === "horizontal") {
       // For each row independently
       for (let r = src.startRow; r <= src.endRow; r++) {
         const sourceVals = [];
@@ -926,7 +949,7 @@ export default function ExcelGrid() {
     return withRefsColored;
   };
 
-  // Marquee (marching-ants-border) SVG rectangle. Uses a CSS animation on stroke-dashoffset.
+  // Marquee (MARCHING-ANTS-BORDER) SVG rectangle. Uses a CSS animation on stroke-dashoffset.
   const MarqueeBorder = ({ left, top, width, height, color = "black", strokeWidth = 2, dashArray = "6 4", zIndex = 60 }) => {
     if (width == null || height == null) return null;
     // Padding so stroke is fully visible (stroke is centered on rect path)
@@ -982,8 +1005,8 @@ export default function ExcelGrid() {
             .map((r) => `${rowHeights[r]}px`)
             .join(" ")}`,
         }}
-        ref={containerRef}
-      >
+        ref={containerRef} >
+        {/* EMPTY TOP-LEFT CORNER */}
         {/* Empty top-left corner */}
         <div className="bg-gray-300 border border-gray-400" />
 
